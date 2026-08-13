@@ -149,7 +149,7 @@ export default function HeadcountApp(){
   useEffect(()=>{
     if(!gisReady||authStatus==="signed-in"||!googleButton.current||!window.google)return;
     googleButton.current.replaceChildren();
-    window.google.accounts.id.renderButton(googleButton.current,{theme:"outline",size:"medium",text:"signin_with",shape:"rectangular",width:170});
+    window.google.accounts.id.renderButton(googleButton.current,{theme:"filled_blue",size:"large",text:"signin_with",shape:"rectangular",width:300});
   },[authStatus,gisReady]);
 
   useEffect(()=>{
@@ -259,6 +259,7 @@ export default function HeadcountApp(){
   const schoolMeta=profile?.schoolCode?[profile.schoolCode,profile.schoolZone&&`Zon ${profile.schoolZone}`].filter(Boolean).join(" · "):(profile?.role==="ADMIN"?"Akses semua sekolah":"Semak tab PENGGUNA");
   const props={students:filtered,allStudents:students,cycle,setCycle,subject,setSubject,year,setYear,query,setQuery,go,setSelected,announce,exportCsv,userName};
   const sheetLabel=sheetStatus==="connected"?"Sheets disambungkan":sheetStatus==="connecting"?"Menyambung Sheets":sheetStatus==="fallback"?"Sheets gagal · demo lokal":"Sheets belum disambungkan";
+  if(authStatus!=="signed-in")return <LoginScreen authStatus={authStatus} gisReady={gisReady} googleButton={googleButton} toast={toast}/>;
   return <div className="app-shell">
     <aside className={`sidebar ${mobile?"open":""}`}>
       <div className="brand"><b><GraduationCap size={23}/></b><span><strong>myHeadcountKT</strong><small>Headcount & Intervensi</small></span><button onClick={()=>setMobile(false)}><X size={20}/></button></div>
@@ -284,6 +285,38 @@ export default function HeadcountApp(){
     {modal==="profile"&&profile&&<ProfileModal profile={profile} saving={profileSaving} close={()=>setModal(null)} save={name=>{void saveProfileName(name)}}/>}
     {toast&&<div className="toast"><CheckCircle2 size={19}/>{toast}</div>}
   </div>
+}
+
+function LoginScreen({authStatus,gisReady,googleButton,toast}:{authStatus:AuthStatus;gisReady:boolean;googleButton:React.RefObject<HTMLDivElement|null>;toast:string}){
+  const status=authStatus==="error"?"Perkhidmatan Google tidak dapat dimuatkan. Muat semula halaman untuk mencuba lagi.":authStatus==="loading"?"Memeriksa sambungan Google...":"Gunakan akaun Google yang telah didaftarkan oleh pentadbir.";
+  return <main className="login-page">
+    <section className="login-showcase">
+      <div className="login-brand"><b><GraduationCap size={29}/></b><span><strong>myHeadcountKT</strong><small>Headcount & Intervensi Pemulihan Khas</small></span></div>
+      <div className="login-copy"><span className="login-eyebrow">SISTEM PEMULIHAN KHAS · KOTA TINGGI</span><h1>Kenal pasti kemajuan.<br/><em>Bertindak dengan tepat.</em></h1><p>Satu ruang kerja untuk guru merekod headcount, memantau perkembangan kemahiran dan merancang intervensi murid.</p></div>
+      <div className="login-features">
+        <article><i><FileSpreadsheet size={20}/></i><span><strong>Rekod berpusat</strong><small>Data disimpan terus ke Google Sheets</small></span></article>
+        <article><i><TrendingUp size={20}/></i><span><strong>Pantau kemajuan</strong><small>Ikuti TOV, AR dan sasaran ETR</small></span></article>
+        <article><i><ShieldCheck size={20}/></i><span><strong>Akses terkawal</strong><small>Peranan guru dan admin ditentukan sistem</small></span></article>
+      </div>
+      <div className="login-preview" aria-hidden="true"><span><small>RINGKASAN KEMAJUAN</small><strong>Headcount semasa</strong></span><div><b><em>72%</em><small>Murid meningkat</small></b><i><span style={{height:"44%"}}/><span style={{height:"68%"}}/><span style={{height:"56%"}}/><span style={{height:"84%"}}/><span style={{height:"72%"}}/></i></div></div>
+      <footer>myHeadcountKT · Data lebih jelas, intervensi lebih terarah</footer>
+    </section>
+    <section className="login-access">
+      <div className="login-card">
+        <div className="login-card-icon"><Lock size={23}/></div>
+        <span className="login-card-label">PORTAL PENGGUNA</span>
+        <h2>Log masuk ke myHeadcountKT</h2>
+        <p>Akses dashboard, data murid dan rekod intervensi menggunakan akaun Google anda.</p>
+        <div className={`login-google ${authStatus}`} ref={googleButton}>{!gisReady&&<span className="login-loading"><i/><small>{status}</small></span>}</div>
+        {gisReady&&<small className="login-help">{status}</small>}
+        <div className="login-divider"><span>AKSES SELAMAT</span></div>
+        <ul><li><CheckCircle2 size={16}/>Identiti Google disahkan</li><li><CheckCircle2 size={16}/>Sekolah dan peranan dipadankan automatik</li><li><CheckCircle2 size={16}/>Data murid tidak dipaparkan sebelum login</li></ul>
+        <aside><ShieldCheck size={18}/><span><strong>Privasi anda dilindungi</strong><small>myHeadcountKT tidak menyimpan kata laluan Google anda.</small></span></aside>
+      </div>
+      <p className="login-support"><HelpCircle size={15}/>Masalah akses? Hubungi pentadbir sistem sekolah anda.</p>
+    </section>
+    {toast&&<div className="toast"><AlertCircle size={19}/>{toast}</div>}
+  </main>
 }
 
 function Heading({eyebrow,title,desc,children}:{eyebrow:string;title:string;desc:string;children?:React.ReactNode}){return <section className="heading"><div><span>{eyebrow}</span><h1>{title}</h1><p>{desc}</p></div>{children}</section>}

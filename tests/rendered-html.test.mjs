@@ -20,8 +20,9 @@ test("renders the myHeadcountKT product shell", async () => {
   const html = await response.text();
   assert.match(html, /myHeadcountKT/);
   assert.match(html, /Headcount &amp; Intervensi/);
-  assert.match(html, /PORTAL GURU/);
-  assert.match(html, /Selamat datang, Pengguna Google/);
+  assert.match(html, /Log masuk ke myHeadcountKT/);
+  assert.match(html, /Data murid tidak dipaparkan sebelum login/);
+  assert.doesNotMatch(html, /PORTAL GURU|Selamat datang, Pengguna Google/);
   assert.doesNotMatch(html, /Cikgu Aina|Nur Aina Binti Ahmad/);
   assert.doesNotMatch(html, /codex-preview|Your site is taking shape|react-loading-skeleton/i);
 });
@@ -34,6 +35,8 @@ test("loads and updates the authenticated Google Sheets profile", async () => {
   ]);
   assert.match(appSource, /ProfileModal/);
   assert.match(appSource, /saveProfileName/);
+  assert.match(appSource, /authStatus!=="signed-in"/);
+  assert.match(appSource, /function LoginScreen/);
   assert.doesNotMatch(appSource, /Cikgu Aina|Nur Aina Binti Ahmad/);
   assert.match(serviceSource, /getProfile/);
   assert.match(serviceSource, /saveProfile/);
