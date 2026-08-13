@@ -127,12 +127,18 @@ export function createLocalDataService<T>(key: string): DataService<T> {
 export function createAppsScriptDataService<T>(
   endpoint: string,
   normalizeStudent: (value: unknown) => T = (value) => value as T,
+  getIdToken: () => string = () => "",
 ): DataService<T> {
   const request = async (action: string, payload: JsonRecord = {}): Promise<unknown> => {
+    const idToken = getIdToken().trim();
+    if (!idToken) {
+      throw new Error("Sila log masuk dengan Google sebelum mengakses Google Sheets.");
+    }
+    const requestId = globalThis.crypto.randomUUID();
     const response = await fetch(endpoint, {
       method: "POST",
       headers: { "Content-Type": "text/plain;charset=utf-8" },
-      body: JSON.stringify({ action, ...payload }),
+      body: JSON.stringify({ action, ...payload, request_id: requestId, idToken }),
     });
     const text = await response.text();
     let result: JsonRecord;

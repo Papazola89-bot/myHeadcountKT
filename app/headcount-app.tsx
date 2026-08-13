@@ -22,6 +22,23 @@ type Cycle = "TOV" | "OTI 1" | "AR 1" | "OTI 2" | "AR 2" | "OTI 3" | "AR 3" | "E
 type View = "dashboard" | "students" | "headcount" | "interventions" | "analysis" | "reports" | "schools" | "submissions" | "users" | "audit" | "settings";
 type Student = { id:string; name:string; year:number; className:string; subject:Subject; status:"Aktif"|"Pelepasan"; startDate:string; skills:Record<Cycle,number>; intervention:"Tiada"|"Aktif"|"Selesai"|"Perlu susulan" };
 type Intervention = { id:string; studentId:string; issue:string; action:string; method:string; start:string; review:string; status:string };
+type AuthStatus = "loading" | "signed-out" | "signed-in" | "error";
+type SheetStatus = "idle" | "connecting" | "connected" | "fallback";
+type GoogleCredentialResponse = { credential?: string };
+
+declare global {
+  interface Window {
+    google?: {
+      accounts: {
+        id: {
+          initialize(options:{client_id:string;callback:(response:GoogleCredentialResponse)=>void;auto_select?:boolean}):void;
+          renderButton(element:HTMLElement,options:{theme:string;size:string;text:string;shape:string;width:number}):void;
+          disableAutoSelect():void;
+        };
+      };
+    };
+  }
+}
 
 const cycles:Cycle[] = ["TOV","OTI 1","AR 1","OTI 2","AR 2","OTI 3","AR 3","ETR"];
 const skillOptions = Array.from({length:32},(_,i)=>i+1);
@@ -54,12 +71,30 @@ const schools=[
   ["SK Bandar Penawar 2","JBA3074","Bandar",27,79,"Disahkan"],
   ["SK Sungai Rengit","JBA3044","Tanjung Surat",19,64,"Draf"],
 ];
+const GOOGLE_CLIENT_ID=(process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID||"491720020946-9f6ifkrt5nrrpu4a7dsqeunv9iu0ell6.apps.googleusercontent.com").trim();
+const GOOGLE_GIS_SRC="https://accounts.google.com/gsi/client";
 const appsScriptEndpoint=(process.env.NEXT_PUBLIC_GOOGLE_APPS_SCRIPT_URL||"https://script.google.com/macros/s/AKfycbxxplK0PDUs2sS0_CkVes8RB9c42dSX8ptP7ZMMXmGDJl1Nt_rO7fOMS99YN2SFChvY/exec").trim();
 const localService=createLocalDataService<Student>("myHeadcountKT-demo-v1");
-const appsScriptService=appsScriptEndpoint?createAppsScriptDataService<Student>(appsScriptEndpoint,(value)=>{
+const normalizeStudent=(value:unknown):Student=>{
   const student=normalizeAppsScriptStudent(value);
   return {...student,skills:student.skills as Record<Cycle,number>};
-}):null;
+};
+const decodeGoogleToken=(token:string):{email:string;exp:number;aud:string;iss:string}|null=>{
+  try{
+    const encoded=token.split(".")[1];
+    if(!encoded)return null;
+    const base64=encoded.replace(/-/g,"+").replace(/_/g,"/").padEnd(Math.ceil(encoded.length/4)*4,"=");
+    const payload=JSON.parse(decodeURIComponent(Array.from(atob(base64),char=>`%${char.charCodeAt(0).toString(16).padStart(2,"0")}`).join(""))) as {email?:unknown;exp?:unknown;aud?:unknown;iss?:unknown};
+    const email=typeof payload.email==="string"?payload.email:"";
+    const exp=Number(payload.exp||0),aud=String(payload.aud||""),iss=String(payload.iss||"");
+    return email&&exp&&aud&&iss?{email,exp,aud,iss}:null;
+  }catch{return null}
+};
+const validSessionToken=(token:string)=>{
+  const claims=decodeGoogleToken(token);
+  const googleIssuer=claims?.iss==="accounts.google.com"||claims?.iss==="https://accounts.google.com";
+  return claims&&claims.aud===GOOGLE_CLIENT_ID&&googleIssuer&&claims.exp*1000>Date.now()+30_000?claims:null;
+};
 const kp=(v:number)=>v>=32?"Menguasai":`KP${v}`;
 const initials=(n:string)=>n.split(" ").slice(0,2).map(p=>p[0]).join("");
 const date=(d:string)=>new Intl.DateTimeFormat("ms-MY",{day:"numeric",month:"short",year:"numeric"}).format(new Date(d));
@@ -81,34 +116,78 @@ export default function HeadcountApp(){
   const [year,setYear]=useState("Semua tahun"),[query,setQuery]=useState(""),[selected,setSelected]=useState<Student|null>(null),[modal,setModal]=useState<"add"|"intervention"|"submit"|null>(null);
   const [mobile,setMobile]=useState(false),[toast,setToast]=useState(""),[saved,setSaved]=useState("Disimpan 9:42 pagi"),[undo,setUndo]=useState<Student[]|null>(null);
   const [submission,setSubmission]=useState<Record<string,string>>({TOV:"Disahkan Admin","AR 1":"Disahkan Admin","AR 2":"Telah Dihantar","AR 3":"Draf"});
-  const timer=useRef<ReturnType<typeof setTimeout>|null>(null);
+  const [idToken,setIdToken]=useState(""),[googleEmail,setGoogleEmail]=useState(""),[authStatus,setAuthStatus]=useState<AuthStatus>("loading"),[sheetStatus,setSheetStatus]=useState<SheetStatus>("idle"),[gisReady,setGisReady]=useState(false);
+  const timer=useRef<ReturnType<typeof setTimeout>|null>(null),googleButton=useRef<HTMLDivElement|null>(null);
   const announce=(m:string)=>{setToast(m);if(timer.current)clearTimeout(timer.current);timer.current=setTimeout(()=>setToast(""),3600)};
+  const appsScriptService=useMemo(()=>appsScriptEndpoint&&idToken?createAppsScriptDataService<Student>(appsScriptEndpoint,normalizeStudent,()=>validSessionToken(idToken)?idToken:""):null,[idToken]);
+
+  useEffect(()=>{
+    let active=true;
+    const acceptCredential=(response:GoogleCredentialResponse)=>{
+      const token=response.credential||"",claims=validSessionToken(token);
+      if(!active||!claims){setAuthStatus("error");announce("Token Google tidak sah atau telah tamat tempoh.");return}
+      // ID token hanya berada dalam memori React dan hilang apabila halaman dimuat semula.
+      setIdToken(token);setGoogleEmail(claims.email);setAuthStatus("signed-in");
+      announce(`Log masuk Google berjaya sebagai ${claims.email}.`);
+    };
+    const initialize=()=>{
+      if(!active||!window.google)return;
+      window.google.accounts.id.initialize({client_id:GOOGLE_CLIENT_ID,callback:acceptCredential,auto_select:false});
+      setGisReady(true);
+    };
+    setAuthStatus("signed-out");
+    if(window.google){initialize();return()=>{active=false}}
+    let script=document.querySelector<HTMLScriptElement>(`script[src="${GOOGLE_GIS_SRC}"]`);
+    if(!script){script=document.createElement("script");script.src=GOOGLE_GIS_SRC;script.async=true;script.defer=true;document.head.appendChild(script)}
+    const failed=()=>{if(active){setAuthStatus(current=>current==="signed-in"?current:"error");announce("Butang log masuk Google gagal dimuatkan.")}};
+    script.addEventListener("load",initialize);script.addEventListener("error",failed);
+    return()=>{active=false;script?.removeEventListener("load",initialize);script?.removeEventListener("error",failed)};
+  },[]);
+
+  useEffect(()=>{
+    if(!gisReady||authStatus==="signed-in"||!googleButton.current||!window.google)return;
+    googleButton.current.replaceChildren();
+    window.google.accounts.id.renderButton(googleButton.current,{theme:"outline",size:"medium",text:"signin_with",shape:"rectangular",width:170});
+  },[authStatus,gisReady]);
+
+  useEffect(()=>{
+    if(!idToken)return;
+    const claims=validSessionToken(idToken);
+    if(!claims){setIdToken("");setGoogleEmail("");setAuthStatus("signed-out");return}
+    const expiryTimer=window.setTimeout(()=>{setIdToken("");setGoogleEmail("");setAuthStatus("signed-out");setSheetStatus("idle");announce("Sesi Google telah tamat. Sila log masuk semula.")},Math.max(claims.exp*1000-Date.now(),0));
+    return()=>window.clearTimeout(expiryTimer);
+  },[idToken]);
+
   useEffect(()=>{
     let active=true;
     const load=async()=>{
+      if(authStatus==="loading")return;
       if(!appsScriptService){
         const cached=await localService.getStudents();
         if(active&&cached.length)setStudents(cached);
-        if(active)setSaved("Mod demo lokal · endpoint belum dikonfigurasi");
+        if(active){setSheetStatus("idle");setSaved(authStatus==="signed-in"?"Endpoint Google Sheets belum dikonfigurasi":"Log masuk Google untuk menyambung Sheets")}
         return;
       }
+      setSheetStatus("connecting");setSaved("Menyambung ke Google Sheets...");
       try{
         const remote=await appsScriptService.getStudents();
         if(!active)return;
-        if(remote.length){setStudents(remote);await localService.saveStudents(remote)}
-        setSaved("Google Sheets disambungkan");
+        setStudents(remote);await localService.saveStudents(remote);
+        setSheetStatus("connected");setSaved("Google Sheets disambungkan");
       }catch(error){
         const cached=await localService.getStudents();
         if(!active)return;
         if(cached.length)setStudents(cached);
-        setSaved("Mod demo lokal · Google Sheets gagal");
+        setSheetStatus("fallback");setSaved("Mod demo lokal · Google Sheets gagal");
         announce(`Google Sheets tidak dapat dicapai. Data demo lokal digunakan. ${error instanceof Error?error.message:""}`.trim());
       }
     };
     void load();
     return()=>{active=false};
-  },[]);
+  },[appsScriptService,authStatus]);
+  const signOutGoogle=()=>{window.google?.accounts.id.disableAutoSelect();setIdToken("");setGoogleEmail("");setAuthStatus("signed-out");setSheetStatus("idle");setSaved("Log masuk Google untuk menyambung Sheets");announce("Anda telah log keluar daripada sesi myHeadcountKT.")};
   const persist=(next:Student[],previous?:Student[])=>{if(previous)setUndo(previous);setStudents(next);localService.saveStudents(next).catch(()=>announce("Cache lokal tidak dapat disimpan."));setSaved(`Disimpan lokal ${new Intl.DateTimeFormat("ms-MY",{hour:"numeric",minute:"2-digit"}).format(new Date())}`)};
+  const localOnlyMessage=!idToken?"Log masuk Google untuk menyimpan ke Sheets. Data kini disimpan pada peranti sahaja.":"Google Sheets belum tersedia. Data kini disimpan pada peranti sahaja.";
   const filtered=useMemo(()=>students.filter(s=>(subject==="Semua"||s.subject===subject)&&(year==="Semua tahun"||s.year===Number(year.slice(-1)))&&s.name.toLowerCase().includes(query.toLowerCase())),[students,subject,year,query]);
   const menu=role==="guru"?guruMenu:adminMenu;
   const go=(v:View)=>{setView(v);setMobile(false);window.scrollTo({top:0,behavior:"smooth"})};
@@ -116,47 +195,48 @@ export default function HeadcountApp(){
     const student=students.find(s=>s.id===id);
     const prev=students;
     persist(students.map(s=>s.id===id?{...s,skills:{...s.skills,[cycle]:value}}:s),prev);
-    if(!appsScriptService||!student)return;
+    if(!appsScriptService||!student){announce(localOnlyMessage);return}
     try{
       await appsScriptService.saveAssessment(id,cycle,`KP${value}`,{subject:student.subject,tahun_data:2026});
-      setSaved(`Google Sheets · ${new Intl.DateTimeFormat("ms-MY",{hour:"numeric",minute:"2-digit"}).format(new Date())}`);
+      setSheetStatus("connected");setSaved(`Google Sheets · ${new Intl.DateTimeFormat("ms-MY",{hour:"numeric",minute:"2-digit"}).format(new Date())}`);
     }catch(error){
-      setSaved("Disimpan lokal · Google Sheets gagal");
+      setSheetStatus("fallback");setSaved("Disimpan lokal · Google Sheets gagal");
       announce(`Penilaian disimpan pada peranti sahaja. ${error instanceof Error?error.message:""}`.trim());
     }
   };
   const saveIntervention=async(i:Intervention)=>{
     setInterventions(current=>[i,...current]);setModal(null);setSelected(null);
-    if(!appsScriptService){announce("Intervensi disimpan dalam mod demo lokal.");return}
+    if(!appsScriptService){announce(localOnlyMessage);return}
     const student=students.find(s=>s.id===i.studentId);
     try{
       await appsScriptService.saveIntervention({studentId:i.studentId,skillCode:`KP${student?.skills["AR 3"]??1}`,issue:i.issue,action:i.action,method:i.method,startDate:i.start,reviewDate:i.review,status:i.status});
-      announce("Intervensi berjaya disimpan ke Google Sheets.");
+      setSheetStatus("connected");announce("Intervensi berjaya disimpan ke Google Sheets.");
     }catch(error){
-      announce(`Intervensi disimpan pada peranti sahaja. ${error instanceof Error?error.message:""}`.trim());
+      setSheetStatus("fallback");announce(`Intervensi disimpan pada peranti sahaja. ${error instanceof Error?error.message:""}`.trim());
     }
   };
   const saveStudent=async(student:Student)=>{
     persist([...students,student],students);setModal(null);
-    if(!appsScriptService){announce("Murid disimpan dalam mod demo lokal.");return}
+    if(!appsScriptService){announce(localOnlyMessage);return}
     try{
       await appsScriptService.saveStudent({studentId:student.id,name:student.name,year:student.year,className:student.className,subject:student.subject,status:student.status,startDate:student.startDate});
-      announce("Murid baharu berjaya disimpan ke Google Sheets.");
+      setSheetStatus("connected");announce("Murid baharu berjaya disimpan ke Google Sheets.");
     }catch(error){
-      announce(`Murid disimpan pada peranti sahaja. ${error instanceof Error?error.message:""}`.trim());
+      setSheetStatus("fallback");announce(`Murid disimpan pada peranti sahaja. ${error instanceof Error?error.message:""}`.trim());
     }
   };
   const submitCurrentCycle=async()=>{
-    if(!appsScriptService){setSubmission(current=>({...current,[cycle]:"Telah Dihantar"}));setModal(null);announce(`Data ${cycle} ditanda dihantar dalam mod demo lokal.`);return}
+    if(!appsScriptService){setModal(null);announce(!idToken?"Log masuk Google dahulu untuk menghantar data kepada admin.":"Google Sheets belum tersedia; data kekal sebagai draf.");return}
     try{
       await appsScriptService.submitCycle(cycle,{subject:subject==="Semua"?"Bahasa Melayu":subject,tahun:2026});
-      setSubmission(current=>({...current,[cycle]:"Telah Dihantar"}));setModal(null);announce(`Data ${cycle} telah dihantar dan direkodkan dalam Google Sheets.`);
+      setSheetStatus("connected");setSubmission(current=>({...current,[cycle]:"Telah Dihantar"}));setModal(null);announce(`Data ${cycle} telah dihantar dan direkodkan dalam Google Sheets.`);
     }catch(error){
-      setModal(null);announce(`Penghantaran gagal; data kekal sebagai draf. ${error instanceof Error?error.message:""}`.trim());
+      setSheetStatus("fallback");setModal(null);announce(`Penghantaran gagal; data kekal sebagai draf. ${error instanceof Error?error.message:""}`.trim());
     }
   };
   const exportCsv=()=>{const rows=[["ID","Nama","Tahun","Kelas","Subjek",...cycles],...filtered.map(s=>[s.id,s.name,s.year,s.className,s.subject,...cycles.map(c=>kp(s.skills[c]))])];const csv=rows.map(r=>r.map(x=>`"${x}"`).join(",")).join("\n");const a=document.createElement("a");a.href=URL.createObjectURL(new Blob(["\ufeff",csv],{type:"text/csv"}));a.download=`headcount-${cycle.replace(" ","-")}.csv`;a.click();URL.revokeObjectURL(a.href);announce("Fail CSV telah dijana.")};
   const props={students:filtered,allStudents:students,cycle,setCycle,subject,setSubject,year,setYear,query,setQuery,go,setSelected,announce,exportCsv};
+  const sheetLabel=sheetStatus==="connected"?"Sheets disambungkan":sheetStatus==="connecting"?"Menyambung Sheets":sheetStatus==="fallback"?"Sheets gagal · demo lokal":"Sheets belum disambungkan";
   return <div className="app-shell">
     <aside className={`sidebar ${mobile?"open":""}`}>
       <div className="brand"><b><GraduationCap size={23}/></b><span><strong>myHeadcountKT</strong><small>Headcount & Intervensi</small></span><button onClick={()=>setMobile(false)}><X size={20}/></button></div>
@@ -164,7 +244,7 @@ export default function HeadcountApp(){
       <nav><p>MENU UTAMA</p>{menu.map(([key,label,Icon])=><button key={key} className={view===key?"active":""} onClick={()=>go(key)}><Icon size={19}/><span>{label}</span>{key==="interventions"&&<em>{role==="guru"?4:18}</em>}</button>)}</nav>
       <div className="side-bottom"><button onClick={()=>go("settings")}><Settings size={19}/>Profil & Tetapan</button><button><HelpCircle size={19}/>Bantuan</button><div><b className="avatar">{role==="guru"?"NA":"AD"}</b><span><strong>{role==="guru"?"Nur Aina":"Admin PPD"}</strong><small>{role==="guru"?"Guru Pemulihan Khas":"Pentadbir Daerah"}</small></span><LogOut size={17}/></div></div>
     </aside>{mobile&&<button className="backdrop nav" onClick={()=>setMobile(false)}/>}
-    <main><header className="topbar"><div><button className="menu-btn" onClick={()=>setMobile(true)}><Menu size={21}/></button><span><small>{role==="guru"?"PORTAL GURU":"PORTAL ADMIN"}</small><strong>{menu.find(x=>x[0]===view)?.[1]||"Tetapan"}</strong></span></div><div><span className="role-toggle"><button className={role==="guru"?"active":""} onClick={()=>{setRole("guru");go("dashboard")}}>Guru</button><button className={role==="admin"?"active":""} onClick={()=>{setRole("admin");go("dashboard")}}>Admin</button></span><button className="bell"><Bell size={20}/><i/></button><button className="profile"><b className="avatar">{role==="guru"?"NA":"AD"}</b><span>{role==="guru"?"Cikgu Aina":"Admin Daerah"}</span><ChevronDown size={15}/></button></div></header>
+    <main><header className="topbar"><div><button className="menu-btn" onClick={()=>setMobile(true)}><Menu size={21}/></button><span><small>{role==="guru"?"PORTAL GURU":"PORTAL ADMIN"}</small><strong>{menu.find(x=>x[0]===view)?.[1]||"Tetapan"}</strong></span></div><div><span className="role-toggle"><button className={role==="guru"?"active":""} onClick={()=>{setRole("guru");go("dashboard")}}>Guru</button><button className={role==="admin"?"active":""} onClick={()=>{setRole("admin");go("dashboard")}}>Admin</button></span><div className={`google-session ${authStatus} ${sheetStatus}`}><span className="connection-state"><i/><b>{authStatus==="signed-in"?"Google telah dilog masuk":authStatus==="loading"?"Memeriksa sesi Google":authStatus==="error"?"Log masuk Google gagal":"Belum log masuk Google"}</b><small>{authStatus==="signed-in"?`${googleEmail} · ${sheetLabel}`:"Log masuk diperlukan untuk Google Sheets"}</small></span>{authStatus==="signed-in"?<button className="google-signout" onClick={signOutGoogle} title="Log keluar Google"><LogOut size={15}/>Log keluar</button>:<div className="google-signin" ref={googleButton}>{!gisReady&&<small>{authStatus==="error"?"Muat semula halaman untuk cuba lagi":"Memuat butang Google..."}</small>}</div>}</div><button className="bell"><Bell size={20}/><i/></button><button className="profile"><b className="avatar">{role==="guru"?"NA":"AD"}</b><span>{role==="guru"?"Cikgu Aina":"Admin Daerah"}</span><ChevronDown size={15}/></button></div></header>
       <div className="page">
         {role==="guru"?<>
           {view==="dashboard"&&<GuruDashboard {...props}/>} {view==="students"&&<StudentsView {...props} onAdd={()=>setModal("add")} onIntervention={(s:Student)=>{setSelected(s);setModal("intervention")}}/>}

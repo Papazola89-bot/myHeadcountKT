@@ -4,7 +4,8 @@
  * Persediaan sekali sahaja:
  * 1. Ikat projek Apps Script ini kepada satu Google Spreadsheet.
  * 2. Jalankan setupDatabase() daripada editor Apps Script.
- * 3. Deploy sebagai Web App yang dijalankan sebagai pengguna yang mengakses.
+ * 3. Deploy sebagai Web App yang dijalankan sebagai pemilik skrip. Akses data
+ *    tetap memerlukan Google ID token dan rekod aktif dalam PENGGUNA.
  *
  * Untuk projek Apps Script standalone, jalankan:
  * setupDatabase("SPREADSHEET_ID_ANDA");
@@ -16,10 +17,15 @@
 var API_NAME = "myHeadcountKT";
 var API_VERSION = "1.0.0";
 var DATABASE_ID_PROPERTY = "DATABASE_SPREADSHEET_ID";
+var GOOGLE_CLIENT_ID = "491720020946-9f6ifkrt5nrrpu4a7dsqeunv9iu0ell6.apps.googleusercontent.com";
+var GOOGLE_TOKENINFO_URL = "https://oauth2.googleapis.com/tokeninfo";
+var ID_TOKEN_CACHE_SECONDS = 300;
+var ID_TOKEN_CLOCK_SKEW_SECONDS = 300;
+var ID_TOKEN_MAX_AGE_SECONDS = 7200;
 
 var TABLES = {
   SEKOLAH: ["school_id", "kod_sekolah", "nama_sekolah", "zon", "status"],
-  PENGGUNA: ["user_id", "email", "nama", "role", "school_id", "status"],
+  PENGGUNA: ["user_id", "google_sub", "email", "nama", "role", "school_id", "status"],
   MURID: ["student_id", "school_id", "nama", "tahun", "kelas", "tarikh_mula", "subject", "status"],
   PENILAIAN: ["assessment_id", "student_id", "subject", "tahun_data", "cycle", "skill_code", "tarikh", "teacher_id", "timestamp"],
   SASARAN: ["student_id", "OTI1", "OTI2", "OTI3", "ETR"],
@@ -163,7 +169,9 @@ function doPost(e) {
   try {
     var input = parseRequest_(e);
     action = requiredText_(input.action, "action", 50);
-    requestId = optionalText_(input.request_id, 100) || requestId;
+    requestId = action === "getHealth"
+      ? (optionalText_(input.request_id, 100) || requestId)
+      : normalizeRequestId_(input.request_id);
 
     // Nama tindakan sengaja eksplisit. Versi lama mendaftarkan getStudents_
     // sebagai kekunci dan menyebabkan action "getStudents" sentiasa ditolak.
@@ -181,7 +189,7 @@ function doPost(e) {
     }
 
     // Health check tidak membaca data domain dan boleh dipanggil sebelum login.
-    var user = action === "getHealth" ? null : currentUser_();
+    var user = action === "getHealth" ? null : currentUser_(input);
     var data = handlers[action](input, user);
     return successResponse_(data, action, requestId);
   } catch (error) {
@@ -494,26 +502,9 @@ function submitCycle_(input, user) {
   });
 }
 
-function currentUser_() {
-  var email = String(Session.getActiveUser().getEmail() || "").trim().toLowerCase();
-  if (!email) {
-    throw apiError_(
-      "AUTH_REQUIRED",
-      "Identiti Google tidak tersedia. Deploy Web App sebagai 'User accessing the web app' dan hadkan akses kepada domain/organisasi."
-    );
-  }
-
-  var matches = rows_("PENGGUNA").filter(function (row) {
-    return lower_(row.email) === email;
-  });
-  if (matches.length === 0) {
-    throw apiError_("USER_NOT_REGISTERED", "Akaun Google ini belum didaftarkan dalam PENGGUNA.");
-  }
-  if (matches.length > 1) {
-    throw apiError_("DUPLICATE_USER", "Lebih daripada satu rekod pengguna menggunakan e-mel yang sama.");
-  }
-
-  var user = matches[0];
+function currentUser_(input) {
+  var identity = verifyGoogleIdToken_(input);
+  var user = findUserByGoogleIdentity_(identity);
   if (upper_(user.status) !== "AKTIF") {
     throw apiError_("USER_INACTIVE", "Akaun pengguna tidak aktif.");
   }
@@ -524,6 +515,154 @@ function currentUser_() {
     assertSchoolActive_(user.school_id);
   }
   return user;
+}
+
+/**
+ * google_sub ialah identiti utama dan stabil. Fallback e-mel hanya digunakan
+ * sekali untuk memautkan rekod lama yang google_sub-nya masih kosong.
+ */
+function findUserByGoogleIdentity_(identity) {
+  var users = rows_("PENGGUNA");
+  var subMatches = users.filter(function (row) {
+    return text_(row.google_sub) === identity.sub;
+  });
+  if (subMatches.length > 1) {
+    throw apiError_("DUPLICATE_GOOGLE_IDENTITY", "Identiti Google dipautkan kepada lebih daripada satu pengguna.");
+  }
+  if (subMatches.length === 1) return subMatches[0];
+
+  // Link di dalam lock supaya dua permintaan pertama tidak boleh memautkan
+  // identiti yang sama kepada dua baris secara serentak.
+  return withWriteLock_(function () {
+    var lockedUsers = rows_("PENGGUNA");
+    var lockedSubMatches = lockedUsers.filter(function (row) {
+      return text_(row.google_sub) === identity.sub;
+    });
+    if (lockedSubMatches.length > 1) {
+      throw apiError_("DUPLICATE_GOOGLE_IDENTITY", "Identiti Google dipautkan kepada lebih daripada satu pengguna.");
+    }
+    if (lockedSubMatches.length === 1) return lockedSubMatches[0];
+
+    var emailMatches = lockedUsers.filter(function (row) {
+      return lower_(row.email) === identity.email;
+    });
+    if (emailMatches.length === 0) {
+      throw apiError_("USER_NOT_REGISTERED", "Akaun Google ini belum didaftarkan dalam PENGGUNA.");
+    }
+    if (emailMatches.length > 1) {
+      throw apiError_("DUPLICATE_USER", "Lebih daripada satu rekod pengguna menggunakan e-mel yang sama.");
+    }
+
+    var user = emailMatches[0];
+    var linkedSub = text_(user.google_sub);
+    if (linkedSub && linkedSub !== identity.sub) {
+      throw apiError_("GOOGLE_IDENTITY_MISMATCH", "Akaun pengguna telah dipautkan kepada identiti Google yang lain.");
+    }
+    if (!linkedSub) {
+      updateRecord_("PENGGUNA", user._row, { google_sub: identity.sub });
+      user.google_sub = identity.sub;
+    }
+    return user;
+  });
+}
+
+/**
+ * Sahkan credential Google Identity Services melalui endpoint tokeninfo Google.
+ * Cache menggunakan hash token (bukan token mentah) dan tidak melebihi baki
+ * hayat token. Semua tuntutan keselamatan tetap diperiksa selepas cache dibaca.
+ */
+function verifyGoogleIdToken_(input) {
+  var token = optionalText_(input && (input.idToken || input.id_token || input.credential), 10000);
+  if (!token) {
+    throw apiError_("AUTH_REQUIRED", "Token Google Identity Services diperlukan.");
+  }
+  var cache = CacheService.getScriptCache();
+  var cacheKey = "gis:" + tokenHash_(token);
+  var cached = cache.get(cacheKey);
+  var claims;
+
+  if (cached) {
+    try {
+      claims = JSON.parse(cached);
+    } catch (error) {
+      cache.remove(cacheKey);
+      cached = null;
+    }
+  }
+
+  if (!claims) {
+    var response;
+    try {
+      response = UrlFetchApp.fetch(GOOGLE_TOKENINFO_URL, {
+        method: "post",
+        contentType: "application/x-www-form-urlencoded",
+        payload: "id_token=" + encodeURIComponent(token),
+        muteHttpExceptions: true,
+        followRedirects: false,
+        validateHttpsCertificates: true
+      });
+    } catch (error) {
+      throw apiError_("AUTH_SERVICE_UNAVAILABLE", "Pengesahan Google tidak dapat dihubungi. Cuba semula.");
+    }
+
+    if (response.getResponseCode() !== 200) {
+      throw apiError_("INVALID_ID_TOKEN", "Token Google tidak sah atau telah tamat tempoh.");
+    }
+    try {
+      claims = JSON.parse(response.getContentText());
+    } catch (error) {
+      throw apiError_("INVALID_ID_TOKEN_RESPONSE", "Respons pengesahan Google tidak sah.");
+    }
+  }
+
+  var identity = validateGoogleClaims_(claims);
+  if (!cached) {
+    var nowSeconds = Math.floor(new Date().getTime() / 1000);
+    var remainingSeconds = Math.max(1, Number(claims.exp) - nowSeconds);
+    cache.put(cacheKey, JSON.stringify(claims), Math.min(ID_TOKEN_CACHE_SECONDS, remainingSeconds));
+  }
+  return identity;
+}
+
+function validateGoogleClaims_(claims) {
+  if (!claims || Object.prototype.toString.call(claims) !== "[object Object]") {
+    throw apiError_("INVALID_ID_TOKEN", "Tuntutan token Google tidak sah.");
+  }
+  if (text_(claims.aud) !== GOOGLE_CLIENT_ID) {
+    throw apiError_("INVALID_TOKEN_AUDIENCE", "Token Google bukan untuk aplikasi ini.");
+  }
+  var issuer = lower_(claims.iss);
+  if (issuer !== "accounts.google.com" && issuer !== "https://accounts.google.com") {
+    throw apiError_("INVALID_TOKEN_ISSUER", "Penerbit token Google tidak sah.");
+  }
+
+  var expiresAt = Number(claims.exp);
+  var issuedAt = Number(claims.iat);
+  var nowSeconds = Math.floor(new Date().getTime() / 1000);
+  if (!Number.isFinite(expiresAt) || expiresAt <= nowSeconds) {
+    throw apiError_("ID_TOKEN_EXPIRED", "Token Google telah tamat tempoh.");
+  }
+  if (!Number.isFinite(issuedAt)) {
+    throw apiError_("INVALID_TOKEN_ISSUED_AT", "Masa token Google dikeluarkan tidak sah.");
+  }
+  if (issuedAt > nowSeconds + ID_TOKEN_CLOCK_SKEW_SECONDS) {
+    throw apiError_("TOKEN_ISSUED_IN_FUTURE", "Masa token Google dikeluarkan berada terlalu jauh pada masa hadapan.");
+  }
+  if (nowSeconds - issuedAt > ID_TOKEN_MAX_AGE_SECONDS) {
+    throw apiError_("ID_TOKEN_TOO_OLD", "Token Google terlalu lama. Sila log masuk semula.");
+  }
+  if (claims.email_verified !== true && lower_(claims.email_verified) !== "true") {
+    throw apiError_("EMAIL_NOT_VERIFIED", "E-mel Google belum disahkan.");
+  }
+
+  var email = lower_(requiredText_(claims.email, "email token", 320));
+  var subject = requiredText_(claims.sub, "sub token", 255);
+  return { email: email, sub: subject, exp: expiresAt, iat: issuedAt };
+}
+
+function tokenHash_(token) {
+  var digest = Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, token, Utilities.Charset.UTF_8);
+  return Utilities.base64EncodeWebSafe(digest).replace(/=+$/g, "");
 }
 
 /** Guru sentiasa dipaksa kepada school_id sendiri; admin boleh memilih sekolah. */
@@ -851,6 +990,14 @@ function normalizeStudentStatus_(value) {
     throw apiError_("INVALID_STUDENT_STATUS", "Status murid mesti Aktif, Pelepasan atau Tidak Aktif.");
   }
   return statuses[status];
+}
+
+function normalizeRequestId_(value) {
+  var requestId = requiredText_(value, "request_id", 36);
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(requestId)) {
+    throw apiError_("INVALID_REQUEST_ID", "request_id mesti UUID yang sah.");
+  }
+  return requestId.toLowerCase();
 }
 
 function requiredDate_(value, fieldName) {

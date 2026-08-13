@@ -26,12 +26,13 @@ Jika backend belum tersedia, aplikasi memaparkan status mod demo dan menggunakan
 
 ## Sambungan Google
 
-Lapisan data frontend berada di `app/lib/data-service.ts`. Ia kini menggunakan `createAppsScriptDataService` untuk membaca murid, menambah murid, menyimpan penilaian/intervensi dan menghantar cycle. `createLocalDataService` hanya digunakan sebagai cache/fallback.
+Lapisan data frontend berada di `app/lib/data-service.ts`. Pengguna perlu log masuk melalui Google Identity Services sebelum aplikasi membaca murid, menambah murid, menyimpan penilaian/intervensi atau menghantar cycle. ID token disimpan dalam memori sahaja dan dihantar bersama `request_id` unik kepada Apps Script. `createLocalDataService` hanya digunakan sebagai cache/fallback.
 
 Fail `google-apps-script/Code.gs` menyediakan:
 
 - penciptaan jadual central database;
-- pemadanan akaun Google kepada pengguna dan sekolah;
+- pengesahan Google ID token terhadap Client ID aplikasi;
+- pemadanan `google_sub` dan e-mel Google kepada pengguna serta sekolah;
 - semakan `school_id` pada backend bagi setiap akses murid;
 - simpan penilaian/intervensi, hantar cycle, lock dan audit log.
 
@@ -41,12 +42,14 @@ Fail `google-apps-script/Code.gs` menyediakan:
 2. Gantikan kandungan fail skrip dengan `google-apps-script/Code.gs`.
 3. Jika skrip terikat pada Google Sheet, jalankan `setupDatabase()`. Jika standalone, jalankan `setupDatabase("SPREADSHEET_ID_ANDA")`.
 4. Benarkan kebenaran Google yang diminta. Fungsi ini mencipta tab `SEKOLAH`, `PENGGUNA`, `MURID`, `PENILAIAN`, `SASARAN`, `INTERVENSI`, `SUBMISSION`, `MASTER_KEMAHIRAN` dan `AUDIT_LOG`.
-5. Isi/semak `SEKOLAH` dan `PENGGUNA`. E-mel mesti sama dengan akaun Google guru; peranan ialah `GURU` atau `ADMIN` dan status ialah `Aktif`.
+5. Isi/semak `SEKOLAH` dan `PENGGUNA`. E-mel mesti sama dengan akaun Google guru; peranan ialah `GURU` atau `ADMIN` dan status ialah `Aktif`. Biarkan `google_sub` kosong untuk akaun lama; backend akan memautkannya sekali selepas log masuk pertama yang sah.
 6. Pilihan: tetapkan Script Property `DEMO_GURU_EMAIL`, kemudian jalankan `seedDemoData()`.
-7. Pilih **Deploy → Manage deployments → Edit → New version → Deploy**. Gunakan **Execute as: User accessing the web app** dan hadkan akses kepada domain/organisasi.
+7. Pilih **Deploy → Manage deployments → Edit → New version → Deploy**. Gunakan **Execute as: Me** kerana identiti pengguna disahkan melalui Google ID token dan akses data tetap dikawal melalui `PENGGUNA`.
 8. Buka URL `/exec?action=health`. Respons sepatutnya JSON dengan `"status":"ok"`.
 
-Jika `Session.getActiveUser().getEmail()` kosong, backend menolak akses. Ini biasanya bermaksud tetapan **Execute as** atau akses domain belum betul. Kod backend sentiasa menentukan `school_id` daripada jadual `PENGGUNA`; nilai sekolah daripada guru tidak dipercayai.
+OAuth Web Client menggunakan Client ID `491720020946-9f6ifkrt5nrrpu4a7dsqeunv9iu0ell6.apps.googleusercontent.com`. Pastikan `https://sihadir-headcount.geek2606.chatgpt.site` dan `http://localhost:3000` telah didaftarkan sebagai **Authorized JavaScript origins**. Client Secret tidak diperlukan oleh frontend dan tidak boleh dimasukkan ke repositori.
+
+Kod backend sentiasa menentukan `school_id`, peranan dan status daripada jadual `PENGGUNA`; nilai tersebut daripada frontend tidak dipercayai. Untuk MVP Apps Script ini, token disahkan melalui endpoint Google `tokeninfo`. Bagi penggunaan berskala besar, pindahkan pengesahan kepada gerbang server-side yang menggunakan JWT/JWKS atau library rasmi Google.
 
 ## Binaan produksi
 
