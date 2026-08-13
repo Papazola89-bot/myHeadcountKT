@@ -40,6 +40,9 @@ test("loads and updates the authenticated Google Sheets profile", async () => {
   assert.match(appSource, /saveProfileName/);
   assert.match(appSource, /authStatus!=="signed-in"/);
   assert.match(appSource, /function LoginScreen/);
+  assert.match(appSource, /if\(!s\)return null/);
+  assert.match(appSource, /students\[0\]\?\.id\|\|""/);
+  assert.doesNotMatch(appSource, /students\.find\(x=>x\.id===item\.studentId\)!/);
   assert.doesNotMatch(appSource, /Cikgu Aina|Nur Aina Binti Ahmad/);
   assert.match(serviceSource, /getProfile/);
   assert.match(serviceSource, /saveProfile/);
