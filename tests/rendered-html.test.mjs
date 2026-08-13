@@ -22,6 +22,9 @@ test("renders the myHeadcountKT product shell", async () => {
   assert.match(html, /Headcount &amp; Intervensi/);
   assert.match(html, /Log masuk ke myHeadcountKT/);
   assert.match(html, /Data murid tidak dipaparkan sebelum login/);
+  assert.match(html, /\/logos\/ppd-kota-tinggi\.png/);
+  assert.match(html, /\/logos\/spb-ppdkt\.png/);
+  assert.match(html, /\/logos\/m3p-johor\.png/);
   assert.doesNotMatch(html, /PORTAL GURU|Selamat datang, Pengguna Google/);
   assert.doesNotMatch(html, /Cikgu Aina|Nur Aina Binti Ahmad/);
   assert.doesNotMatch(html, /codex-preview|Your site is taking shape|react-loading-skeleton/i);

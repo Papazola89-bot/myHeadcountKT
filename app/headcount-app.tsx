@@ -299,6 +299,14 @@ function LoginScreen({authStatus,gisReady,googleButton,toast}:{authStatus:AuthSt
         <article><i><ShieldCheck size={20}/></i><span><strong>Akses terkawal</strong><small>Peranan guru dan admin ditentukan sistem</small></span></article>
       </div>
       <div className="login-preview" aria-hidden="true"><span><small>RINGKASAN KEMAJUAN</small><strong>Headcount semasa</strong></span><div><b><em>72%</em><small>Murid meningkat</small></b><i><span style={{height:"44%"}}/><span style={{height:"68%"}}/><span style={{height:"56%"}}/><span style={{height:"84%"}}/><span style={{height:"72%"}}/></i></div></div>
+      <div className="login-organizations">
+        <span><small>IDENTITI ORGANISASI</small><strong>Inisiatif pendidikan Pemulihan Khas Kota Tinggi</strong></span>
+        <div>
+          <figure className="org-logo ppdkt-logo"><span><img src="/logos/ppd-kota-tinggi.png" alt="Logo Pejabat Pendidikan Daerah Kota Tinggi"/></span><figcaption>PPD Kota Tinggi</figcaption></figure>
+          <figure className="org-logo spb-logo"><span><img src="/logos/spb-ppdkt.png" alt="Logo Sektor Pembelajaran PPD Kota Tinggi"/></span><figcaption>Sektor Pembelajaran</figcaption></figure>
+          <figure className="org-logo m3p-logo"><span><img src="/logos/m3p-johor.png" alt="Logo Majlis Permuafakatan Guru Pemulihan Khas Negeri Johor"/></span><figcaption>M3P Johor</figcaption></figure>
+        </div>
+      </div>
       <footer>myHeadcountKT · Data lebih jelas, intervensi lebih terarah</footer>
     </section>
     <section className="login-access">
