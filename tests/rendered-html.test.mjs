@@ -77,6 +77,25 @@ test("all enabled portal buttons expose an action", async () => {
   assert.match(source, /className="side-logout" onClick=\{signOutGoogle\}/);
 });
 
+test("school administration uses Google Sheets rather than hardcoded demo rows", async () => {
+  const [appSource, serviceSource, backendSource] = await Promise.all([
+    readFile(new URL("../app/headcount-app.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/lib/data-service.ts", import.meta.url), "utf8"),
+    readFile(new URL("../google-apps-script/Code.gs", import.meta.url), "utf8"),
+  ]);
+  assert.doesNotMatch(appSource, /const schools=\[/);
+  assert.match(appSource, /appsScriptService\.getSchools\(\)/);
+  assert.match(appSource, /ClearSchoolsModal/);
+  assert.match(serviceSource, /request\("getSchools"\)/);
+  assert.match(serviceSource, /request\("deleteSchool"/);
+  assert.match(serviceSource, /request\("clearSchools"/);
+  assert.match(backendSource, /getSchools: getSchools_/);
+  assert.match(backendSource, /deleteSchool: deleteSchool_/);
+  assert.match(backendSource, /clearSchools: clearSchools_/);
+  assert.match(backendSource, /assertSchoolUnused_/);
+  assert.match(backendSource, /PADAM SEMUA SEKOLAH/);
+});
+
 test("includes product-specific social metadata", async () => {
   const html = await (await render()).text();
   assert.match(html, /og:image/);

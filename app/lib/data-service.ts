@@ -19,12 +19,28 @@ export type UserProfile = {
   schoolZone: string;
 };
 
+export type SchoolRecord = {
+  id: string;
+  code: string;
+  name: string;
+  zone: string;
+  status: "Aktif" | "Tidak Aktif";
+  teacherCount: number;
+  studentCount: number;
+  achievement: number;
+  submissionStatus: string;
+};
+
 export type DataService<T> = {
   getProfile(): Promise<UserProfile>;
   saveProfile(name: string): Promise<UserProfile>;
   getStudents(): Promise<T[]>;
+  getSchools(): Promise<SchoolRecord[]>;
   saveStudents(students: T[]): Promise<void>;
   saveStudent(payload: Record<string, unknown>): Promise<void>;
+  saveSchool(payload: Record<string, unknown>): Promise<SchoolRecord>;
+  deleteSchool(schoolId: string): Promise<void>;
+  clearSchools(confirmation: string): Promise<void>;
   saveAssessment(
     studentId: string,
     cycle: string,
@@ -69,6 +85,22 @@ function normalizeUserProfile(value: unknown): UserProfile {
     schoolName: String(row.school_name ?? row.schoolName ?? ""),
     schoolCode: String(row.school_code ?? row.schoolCode ?? ""),
     schoolZone: String(row.school_zone ?? row.schoolZone ?? ""),
+  };
+}
+
+function normalizeSchool(value: unknown): SchoolRecord {
+  const row = asRecord(value);
+  const rawStatus = String(row.status ?? "Aktif").toLowerCase();
+  return {
+    id: String(row.school_id ?? row.schoolId ?? row.id ?? ""),
+    code: String(row.kod_sekolah ?? row.schoolCode ?? row.code ?? ""),
+    name: String(row.nama_sekolah ?? row.schoolName ?? row.name ?? "Tanpa nama"),
+    zone: String(row.zon ?? row.schoolZone ?? row.zone ?? "-"),
+    status: rawStatus === "aktif" ? "Aktif" : "Tidak Aktif",
+    teacherCount: Number(row.teacher_count ?? row.teacherCount ?? 0),
+    studentCount: Number(row.student_count ?? row.studentCount ?? 0),
+    achievement: Number(row.achievement_percent ?? row.achievement ?? 0),
+    submissionStatus: String(row.submission_status ?? row.submissionStatus ?? "Belum mula"),
   };
 }
 
@@ -148,10 +180,22 @@ export function createLocalDataService<T>(key: string): DataService<T> {
       const raw = window.localStorage.getItem(key);
       return raw ? (JSON.parse(raw) as T[]) : [];
     },
+    async getSchools() {
+      return [];
+    },
     async saveStudents(students) {
       window.localStorage.setItem(key, JSON.stringify(students));
     },
     async saveStudent() {},
+    async saveSchool() {
+      throw new Error("Sekolah tidak boleh disimpan dalam mod lokal.");
+    },
+    async deleteSchool() {
+      throw new Error("Sekolah tidak boleh dipadam dalam mod lokal.");
+    },
+    async clearSchools() {
+      throw new Error("Senarai sekolah tidak boleh dikosongkan dalam mod lokal.");
+    },
     async saveAssessment() {},
     async saveIntervention() {},
     async submitCycle() {},
@@ -201,10 +245,24 @@ export function createAppsScriptDataService<T>(
       if (!Array.isArray(data)) throw new Error("Senarai murid daripada Google Sheets tidak sah.");
       return data.map(normalizeStudent);
     },
+    async getSchools() {
+      const data = await request("getSchools");
+      if (!Array.isArray(data)) throw new Error("Senarai sekolah daripada Google Sheets tidak sah.");
+      return data.map(normalizeSchool);
+    },
     // MURID diurus melalui helaian; cache UI disimpan oleh adapter setempat.
     async saveStudents() {},
     async saveStudent(payload) {
       await request("saveStudent", payload);
+    },
+    async saveSchool(payload) {
+      return normalizeSchool(await request("saveSchool", payload));
+    },
+    async deleteSchool(schoolId) {
+      await request("deleteSchool", { schoolId });
+    },
+    async clearSchools(confirmation) {
+      await request("clearSchools", { confirmation });
     },
     async saveAssessment(studentId, cycle, skillCode, context) {
       await request("saveAssessment", { studentId, cycle, skillCode, ...context });

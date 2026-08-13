@@ -34,6 +34,7 @@ Fail `google-apps-script/Code.gs` menyediakan:
 - pengesahan Google ID token terhadap Client ID aplikasi;
 - pemadanan `google_sub` dan e-mel Google kepada pengguna serta sekolah;
 - semakan `school_id` pada backend bagi setiap akses murid;
+- senarai sekolah sebenar daripada tab `SEKOLAH`, tambah sekolah, padam sekolah kosong dan clear data sekolah kosong untuk pentadbir;
 - simpan penilaian/intervensi, hantar cycle, lock dan audit log.
 
 ### Persediaan Apps Script

@@ -181,6 +181,10 @@ function doPost(e) {
       saveProfile: saveProfile_,
       getStudents: getStudents_,
       saveStudent: saveStudent_,
+      getSchools: getSchools_,
+      saveSchool: saveSchool_,
+      deleteSchool: deleteSchool_,
+      clearSchools: clearSchools_,
       saveAssessment: saveAssessment_,
       saveIntervention: saveIntervention_,
       submitCycle: submitCycle_
@@ -289,6 +293,128 @@ function getStudents_(input, user) {
     result.targets = targetsByStudent[id] || null;
     return result;
   });
+}
+
+/** Senarai organisasi sebenar untuk portal admin, termasuk kiraan berkaitan. */
+function getSchools_(input, user) {
+  assertAdmin_(user);
+  var schools = rows_("SEKOLAH");
+  var users = rows_("PENGGUNA");
+  var students = rows_("MURID");
+  var assessments = rows_("PENILAIAN");
+  var submissions = rows_("SUBMISSION");
+  var latestAssessment = {};
+
+  assessments.forEach(function (assessment) {
+    var id = text_(assessment.student_id);
+    if (!id) return;
+    var current = latestAssessment[id];
+    if (!current || dateMillis_(assessment.timestamp || assessment.tarikh) >= dateMillis_(current.timestamp || current.tarikh)) {
+      latestAssessment[id] = assessment;
+    }
+  });
+
+  return schools.map(function (school) {
+    var schoolId = text_(school.school_id);
+    var schoolStudents = students.filter(function (student) { return same_(student.school_id, schoolId); });
+    var achieved = schoolStudents.filter(function (student) {
+      return normalizeSkillNumber_(latestAssessment[text_(student.student_id)] && latestAssessment[text_(student.student_id)].skill_code) >= 32;
+    }).length;
+    var schoolSubmissions = submissions.filter(function (submission) { return same_(submission.school_id, schoolId); });
+    schoolSubmissions.sort(function (a, b) {
+      return dateMillis_(b.verified_at || b.submitted_at) - dateMillis_(a.verified_at || a.submitted_at);
+    });
+    return {
+      school_id: schoolId,
+      kod_sekolah: text_(school.kod_sekolah),
+      nama_sekolah: text_(school.nama_sekolah),
+      zon: text_(school.zon),
+      status: text_(school.status) || "Aktif",
+      teacher_count: users.filter(function (account) {
+        return same_(account.school_id, schoolId) && normalizeRole_(account.role) === "GURU" && upper_(account.status) === "AKTIF";
+      }).length,
+      student_count: schoolStudents.length,
+      achievement_percent: schoolStudents.length ? Math.round(achieved / schoolStudents.length * 100) : 0,
+      submission_status: schoolSubmissions.length ? text_(schoolSubmissions[0].status) : "Belum mula"
+    };
+  });
+}
+
+function saveSchool_(input, user) {
+  assertAdmin_(user);
+  var schoolId = optionalText_(input.schoolId || input.school_id, 100);
+  var code = requiredText_(input.code || input.kod_sekolah, "code", 30);
+  var name = requiredText_(input.name || input.nama_sekolah, "name", 200);
+  var zone = requiredText_(input.zone || input.zon, "zone", 100);
+  var status = upper_(input.status || "AKTIF") === "AKTIF" ? "Aktif" : "Tidak Aktif";
+
+  return withWriteLock_(function () {
+    var existing = schoolId ? findRow_("SEKOLAH", function (row) { return same_(row.school_id, schoolId); }) : null;
+    if (schoolId && !existing) throw apiError_("SCHOOL_NOT_FOUND", "Sekolah tidak ditemui.");
+    var duplicate = findRow_("SEKOLAH", function (row) {
+      return lower_(row.kod_sekolah) === lower_(code) && (!existing || !same_(row.school_id, existing.school_id));
+    });
+    if (duplicate) throw apiError_("DUPLICATE_SCHOOL", "Kod sekolah ini sudah wujud.");
+
+    var record = {
+      school_id: existing ? existing.school_id : (schoolId || "SCH-" + Utilities.getUuid()),
+      kod_sekolah: code,
+      nama_sekolah: name,
+      zon: zone,
+      status: status
+    };
+    if (existing) updateRecord_("SEKOLAH", existing._row, record);
+    else appendRecord_("SEKOLAH", record);
+    audit_(user, "SAVE_SCHOOL", existing || null, record);
+    return publicRow_(record);
+  });
+}
+
+function deleteSchool_(input, user) {
+  assertAdmin_(user);
+  var schoolId = requiredText_(input.schoolId || input.school_id, "schoolId", 100);
+  return withWriteLock_(function () {
+    var school = findRow_("SEKOLAH", function (row) { return same_(row.school_id, schoolId); });
+    if (!school) throw apiError_("SCHOOL_NOT_FOUND", "Sekolah tidak ditemui.");
+    assertSchoolUnused_(schoolId);
+    audit_(user, "DELETE_SCHOOL", publicRow_(school), null);
+    deleteRecord_("SEKOLAH", school._row);
+    return { deleted: true, school_id: schoolId };
+  });
+}
+
+function clearSchools_(input, user) {
+  assertAdmin_(user);
+  if (text_(input.confirmation) !== "PADAM SEMUA SEKOLAH") {
+    throw apiError_("CONFIRMATION_REQUIRED", "Taip PADAM SEMUA SEKOLAH untuk mengesahkan tindakan ini.");
+  }
+  return withWriteLock_(function () {
+    var schools = rows_("SEKOLAH");
+    if (!schools.length) return { cleared: true, deleted_count: 0 };
+    var dependentCount = rows_("PENGGUNA").filter(function (row) { return text_(row.school_id); }).length +
+      rows_("MURID").filter(function (row) { return text_(row.school_id); }).length +
+      rows_("SUBMISSION").filter(function (row) { return text_(row.school_id); }).length;
+    if (dependentCount) {
+      throw apiError_("SCHOOLS_IN_USE", "Senarai sekolah tidak boleh dikosongkan kerana masih mempunyai pengguna, murid atau penghantaran berkaitan.");
+    }
+    audit_(user, "CLEAR_SCHOOLS", { deleted_count: schools.length }, null);
+    clearDataRows_("SEKOLAH");
+    return { cleared: true, deleted_count: schools.length };
+  });
+}
+
+function assertSchoolUnused_(schoolId) {
+  var usedByUser = findRow_("PENGGUNA", function (row) { return same_(row.school_id, schoolId); });
+  var usedByStudent = findRow_("MURID", function (row) { return same_(row.school_id, schoolId); });
+  var usedBySubmission = findRow_("SUBMISSION", function (row) { return same_(row.school_id, schoolId); });
+  if (usedByUser || usedByStudent || usedBySubmission) {
+    throw apiError_("SCHOOL_IN_USE", "Sekolah tidak boleh dipadam kerana masih mempunyai pengguna, murid atau penghantaran berkaitan.");
+  }
+}
+
+function normalizeSkillNumber_(value) {
+  var match = upper_(value).match(/^KP([1-9]|[12][0-9]|3[0-2])$/);
+  return match ? Number(match[1]) : 0;
 }
 
 /**
@@ -903,6 +1029,23 @@ function updateRecord_(name, rowNumber, record, spreadsheet) {
   sheet.getRange(rowNumber, 1, 1, lastColumn).setValues([row]);
 }
 
+function deleteRecord_(name, rowNumber, spreadsheet) {
+  var ss = spreadsheet || database_();
+  var sheet = ss.getSheetByName(name);
+  if (!sheet) throw apiError_("TABLE_NOT_FOUND", "Tab " + name + " belum diwujudkan.");
+  if (!rowNumber || rowNumber < 2 || rowNumber > sheet.getLastRow()) {
+    throw apiError_("INVALID_ROW", "Baris untuk dipadam tidak sah.");
+  }
+  sheet.deleteRow(rowNumber);
+}
+
+function clearDataRows_(name, spreadsheet) {
+  var ss = spreadsheet || database_();
+  var sheet = ss.getSheetByName(name);
+  if (!sheet) throw apiError_("TABLE_NOT_FOUND", "Tab " + name + " belum diwujudkan.");
+  if (sheet.getLastRow() > 1) sheet.deleteRows(2, sheet.getLastRow() - 1);
+}
+
 function audit_(user, action, before, after) {
   appendRecord_("AUDIT_LOG", {
     audit_id: Utilities.getUuid(),
@@ -980,6 +1123,12 @@ function normalizeRole_(value) {
     throw apiError_("INVALID_ROLE", "Peranan pengguna mesti ADMIN atau GURU.");
   }
   return role;
+}
+
+function assertAdmin_(user) {
+  if (!user || normalizeRole_(user.role) !== "ADMIN") {
+    throw apiError_("ROLE_FORBIDDEN", "Tindakan ini hanya dibenarkan untuk pentadbir.");
+  }
 }
 
 function normalizeSubject_(value) {
