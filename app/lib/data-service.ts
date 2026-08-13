@@ -31,11 +31,28 @@ export type SchoolRecord = {
   submissionStatus: string;
 };
 
+export type InterventionRecord = {
+  id: string;
+  studentId: string;
+  studentName: string;
+  schoolId: string;
+  schoolName: string;
+  skillCode: string;
+  issue: string;
+  action: string;
+  method: string;
+  startDate: string;
+  reviewDate: string;
+  outcome: string;
+  status: string;
+};
+
 export type DataService<T> = {
   getProfile(): Promise<UserProfile>;
   saveProfile(name: string): Promise<UserProfile>;
   getStudents(): Promise<T[]>;
   getSchools(): Promise<SchoolRecord[]>;
+  getInterventions(): Promise<InterventionRecord[]>;
   saveStudents(students: T[]): Promise<void>;
   saveStudent(payload: Record<string, unknown>): Promise<void>;
   saveSchool(payload: Record<string, unknown>): Promise<SchoolRecord>;
@@ -101,6 +118,25 @@ function normalizeSchool(value: unknown): SchoolRecord {
     studentCount: Number(row.student_count ?? row.studentCount ?? 0),
     achievement: Number(row.achievement_percent ?? row.achievement ?? 0),
     submissionStatus: String(row.submission_status ?? row.submissionStatus ?? "Belum mula"),
+  };
+}
+
+function normalizeIntervention(value: unknown): InterventionRecord {
+  const row = asRecord(value);
+  return {
+    id: String(row.intervention_id ?? row.interventionId ?? row.id ?? ""),
+    studentId: String(row.student_id ?? row.studentId ?? ""),
+    studentName: String(row.student_name ?? row.studentName ?? "Tanpa nama"),
+    schoolId: String(row.school_id ?? row.schoolId ?? ""),
+    schoolName: String(row.school_name ?? row.schoolName ?? ""),
+    skillCode: String(row.skill_code ?? row.skillCode ?? ""),
+    issue: String(row.isu ?? row.issue ?? ""),
+    action: String(row.intervensi ?? row.action ?? ""),
+    method: String(row.kaedah ?? row.method ?? ""),
+    startDate: String(row.tarikh_mula ?? row.startDate ?? "").slice(0, 10),
+    reviewDate: String(row.tarikh_semakan ?? row.reviewDate ?? "").slice(0, 10),
+    outcome: String(row.outcome ?? ""),
+    status: String(row.status ?? ""),
   };
 }
 
@@ -183,6 +219,9 @@ export function createLocalDataService<T>(key: string): DataService<T> {
     async getSchools() {
       return [];
     },
+    async getInterventions() {
+      return [];
+    },
     async saveStudents(students) {
       window.localStorage.setItem(key, JSON.stringify(students));
     },
@@ -249,6 +288,11 @@ export function createAppsScriptDataService<T>(
       const data = await request("getSchools");
       if (!Array.isArray(data)) throw new Error("Senarai sekolah daripada Google Sheets tidak sah.");
       return data.map(normalizeSchool);
+    },
+    async getInterventions() {
+      const data = await request("getInterventions");
+      if (!Array.isArray(data)) throw new Error("Senarai intervensi daripada Google Sheets tidak sah.");
+      return data.map(normalizeIntervention);
     },
     // MURID diurus melalui helaian; cache UI disimpan oleh adapter setempat.
     async saveStudents() {},

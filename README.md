@@ -35,6 +35,7 @@ Fail `google-apps-script/Code.gs` menyediakan:
 - pemadanan `google_sub` dan e-mel Google kepada pengguna serta sekolah;
 - semakan `school_id` pada backend bagi setiap akses murid;
 - senarai sekolah sebenar daripada tab `SEKOLAH`, tambah sekolah, padam sekolah kosong dan clear data sekolah kosong untuk pentadbir;
+- paparan serta agregat intervensi sebenar daripada tab `INTERVENSI` untuk guru dan pentadbir;
 - simpan penilaian/intervensi, hantar cycle, lock dan audit log.
 
 ### Persediaan Apps Script

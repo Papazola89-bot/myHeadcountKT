@@ -96,6 +96,21 @@ test("school administration uses Google Sheets rather than hardcoded demo rows",
   assert.match(backendSource, /PADAM SEMUA SEKOLAH/);
 });
 
+test("intervention dashboards use Google Sheets and contain no seeded admin totals", async () => {
+  const [appSource, serviceSource, backendSource] = await Promise.all([
+    readFile(new URL("../app/headcount-app.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/lib/data-service.ts", import.meta.url), "utf8"),
+    readFile(new URL("../google-apps-script/Code.gs", import.meta.url), "utf8"),
+  ]);
+  assert.doesNotMatch(appSource, /const initialInterventions/);
+  assert.doesNotMatch(appSource, /value=\{168\}|value=\{94\}|value=\{23\}|value=\{31\}|<strong>262<\/strong>/);
+  assert.match(appSource, /appsScriptService\.getInterventions\(\)/);
+  assert.match(appSource, /Belum ada rekod intervensi/);
+  assert.match(serviceSource, /request\("getInterventions"\)/);
+  assert.match(backendSource, /getInterventions: getInterventions_/);
+  assert.match(backendSource, /function getInterventions_/);
+});
+
 test("includes product-specific social metadata", async () => {
   const html = await (await render()).text();
   assert.match(html, /og:image/);

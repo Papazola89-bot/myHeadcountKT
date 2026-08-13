@@ -185,6 +185,7 @@ function doPost(e) {
       saveSchool: saveSchool_,
       deleteSchool: deleteSchool_,
       clearSchools: clearSchools_,
+      getInterventions: getInterventions_,
       saveAssessment: saveAssessment_,
       saveIntervention: saveIntervention_,
       submitCycle: submitCycle_
@@ -415,6 +416,30 @@ function assertSchoolUnused_(schoolId) {
 function normalizeSkillNumber_(value) {
   var match = upper_(value).match(/^KP([1-9]|[12][0-9]|3[0-2])$/);
   return match ? Number(match[1]) : 0;
+}
+
+/** Rekod intervensi sebenar. Admin melihat semua sekolah; guru sekolah sendiri. */
+function getInterventions_(input, user) {
+  var requestedSchoolId = optionalText_(input.school_id || input.schoolId, 100);
+  var schoolId = authorizedSchoolScope_(user, requestedSchoolId, true);
+  var studentsById = {};
+  rows_("MURID").forEach(function (student) {
+    if (!schoolId || same_(student.school_id, schoolId)) studentsById[text_(student.student_id)] = student;
+  });
+  var schoolsById = {};
+  rows_("SEKOLAH").forEach(function (school) { schoolsById[text_(school.school_id)] = school; });
+
+  return rows_("INTERVENSI").filter(function (row) {
+    return Boolean(studentsById[text_(row.student_id)]);
+  }).map(function (row) {
+    var student = studentsById[text_(row.student_id)];
+    var school = schoolsById[text_(student.school_id)];
+    var result = publicRow_(row);
+    result.student_name = text_(student.nama);
+    result.school_id = text_(student.school_id);
+    result.school_name = school ? text_(school.nama_sekolah) : "";
+    return result;
+  });
 }
 
 /**
