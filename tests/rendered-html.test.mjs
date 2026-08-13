@@ -31,10 +31,11 @@ test("renders the myHeadcountKT product shell", async () => {
 });
 
 test("loads and updates the authenticated Google Sheets profile", async () => {
-  const [appSource, serviceSource, backendSource] = await Promise.all([
+  const [appSource, serviceSource, backendSource, stylesSource] = await Promise.all([
     readFile(new URL("../app/headcount-app.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/lib/data-service.ts", import.meta.url), "utf8"),
     readFile(new URL("../google-apps-script/Code.gs", import.meta.url), "utf8"),
+    readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
   ]);
   assert.match(appSource, /ProfileModal/);
   assert.match(appSource, /saveProfileName/);
@@ -43,6 +44,10 @@ test("loads and updates the authenticated Google Sheets profile", async () => {
   assert.match(appSource, /if\(!s\)return null/);
   assert.match(appSource, /students\[0\]\?\.id\|\|""/);
   assert.doesNotMatch(appSource, /students\.find\(x=>x\.id===item\.studentId\)!/);
+  assert.match(appSource, /aria-label=\{notificationsOpen\?"Tutup notifikasi":"Buka notifikasi"\}/);
+  assert.match(appSource, /Tandakan semua dibaca/);
+  assert.match(appSource, /className="notifications-panel"/);
+  assert.doesNotMatch(stylesSource, /\.topbar \.bell\{display:none\}/);
   assert.doesNotMatch(appSource, /Cikgu Aina|Nur Aina Binti Ahmad/);
   assert.match(serviceSource, /getProfile/);
   assert.match(serviceSource, /saveProfile/);
