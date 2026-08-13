@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 async function render() {
@@ -20,8 +21,24 @@ test("renders the myHeadcountKT product shell", async () => {
   assert.match(html, /myHeadcountKT/);
   assert.match(html, /Headcount &amp; Intervensi/);
   assert.match(html, /PORTAL GURU/);
-  assert.match(html, /Selamat datang, Cikgu Aina/);
+  assert.match(html, /Selamat datang, Pengguna Google/);
+  assert.doesNotMatch(html, /Cikgu Aina|Nur Aina Binti Ahmad/);
   assert.doesNotMatch(html, /codex-preview|Your site is taking shape|react-loading-skeleton/i);
+});
+
+test("loads and updates the authenticated Google Sheets profile", async () => {
+  const [appSource, serviceSource, backendSource] = await Promise.all([
+    readFile(new URL("../app/headcount-app.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/lib/data-service.ts", import.meta.url), "utf8"),
+    readFile(new URL("../google-apps-script/Code.gs", import.meta.url), "utf8"),
+  ]);
+  assert.match(appSource, /ProfileModal/);
+  assert.match(appSource, /saveProfileName/);
+  assert.doesNotMatch(appSource, /Cikgu Aina|Nur Aina Binti Ahmad/);
+  assert.match(serviceSource, /getProfile/);
+  assert.match(serviceSource, /saveProfile/);
+  assert.match(backendSource, /getProfile: getProfile_/);
+  assert.match(backendSource, /saveProfile: saveProfile_/);
 });
 
 test("includes product-specific social metadata", async () => {

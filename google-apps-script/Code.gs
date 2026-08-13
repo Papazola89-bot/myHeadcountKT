@@ -177,6 +177,8 @@ function doPost(e) {
     // sebagai kekunci dan menyebabkan action "getStudents" sentiasa ditolak.
     var handlers = {
       getHealth: getHealth_,
+      getProfile: getProfile_,
+      saveProfile: saveProfile_,
       getStudents: getStudents_,
       saveStudent: saveStudent_,
       saveAssessment: saveAssessment_,
@@ -217,6 +219,43 @@ function getHealth_() {
     database_ready: databaseReady,
     missing_tables: missingTables,
     server_time: new Date()
+  };
+}
+
+function getProfile_(input, user) {
+  return publicUserProfile_(user);
+}
+
+function saveProfile_(input, user) {
+  var name = requiredText_(input.name || input.nama, "name", 120);
+  return withWriteLock_(function () {
+    var existing = findRow_("PENGGUNA", function (row) {
+      return same_(row.user_id, user.user_id);
+    });
+    if (!existing) throw apiError_("USER_NOT_FOUND", "Rekod pengguna tidak ditemui.");
+
+    var before = publicRow_(existing);
+    updateRecord_("PENGGUNA", existing._row, { nama: name });
+    existing.nama = name;
+    audit_(user, "SAVE_PROFILE", before, publicRow_(existing));
+    return publicUserProfile_(existing);
+  });
+}
+
+function publicUserProfile_(user) {
+  var schoolId = text_(user.school_id);
+  var school = schoolId
+    ? findRow_("SEKOLAH", function (row) { return same_(row.school_id, schoolId); })
+    : null;
+  return {
+    user_id: text_(user.user_id),
+    email: lower_(user.email),
+    nama: text_(user.nama) || lower_(user.email),
+    role: normalizeRole_(user.role),
+    school_id: schoolId,
+    school_name: school ? text_(school.nama_sekolah) : "",
+    school_code: school ? text_(school.kod_sekolah) : "",
+    school_zone: school ? text_(school.zon) : ""
   };
 }
 

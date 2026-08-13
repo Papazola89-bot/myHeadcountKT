@@ -8,7 +8,20 @@ export type SubmissionContext = {
   tahun: number;
 };
 
+export type UserProfile = {
+  userId: string;
+  email: string;
+  name: string;
+  role: "GURU" | "ADMIN";
+  schoolId: string;
+  schoolName: string;
+  schoolCode: string;
+  schoolZone: string;
+};
+
 export type DataService<T> = {
+  getProfile(): Promise<UserProfile>;
+  saveProfile(name: string): Promise<UserProfile>;
   getStudents(): Promise<T[]>;
   saveStudents(students: T[]): Promise<void>;
   saveStudent(payload: Record<string, unknown>): Promise<void>;
@@ -42,6 +55,21 @@ function asRecord(value: unknown): JsonRecord {
   return value && typeof value === "object" && !Array.isArray(value)
     ? (value as JsonRecord)
     : {};
+}
+
+function normalizeUserProfile(value: unknown): UserProfile {
+  const row = asRecord(value);
+  const rawRole = String(row.role ?? "GURU").toUpperCase();
+  return {
+    userId: String(row.user_id ?? row.userId ?? ""),
+    email: String(row.email ?? ""),
+    name: String(row.nama ?? row.name ?? "Pengguna"),
+    role: rawRole === "ADMIN" ? "ADMIN" : "GURU",
+    schoolId: String(row.school_id ?? row.schoolId ?? ""),
+    schoolName: String(row.school_name ?? row.schoolName ?? ""),
+    schoolCode: String(row.school_code ?? row.schoolCode ?? ""),
+    schoolZone: String(row.school_zone ?? row.schoolZone ?? ""),
+  };
 }
 
 function skillNumber(value: unknown): number | undefined {
@@ -109,6 +137,12 @@ export function normalizeAppsScriptStudent(value: unknown): NormalizedAppsScript
 /** Storan cache/demo setempat. Data domain Google Sheets menggunakan adapter di bawah. */
 export function createLocalDataService<T>(key: string): DataService<T> {
   return {
+    async getProfile() {
+      throw new Error("Profil pengguna tidak tersedia dalam mod lokal.");
+    },
+    async saveProfile() {
+      throw new Error("Profil pengguna tidak boleh disimpan dalam mod lokal.");
+    },
     async getStudents() {
       if (typeof window === "undefined") return [];
       const raw = window.localStorage.getItem(key);
@@ -156,6 +190,12 @@ export function createAppsScriptDataService<T>(
   };
 
   return {
+    async getProfile() {
+      return normalizeUserProfile(await request("getProfile"));
+    },
+    async saveProfile(name) {
+      return normalizeUserProfile(await request("saveProfile", { name }));
+    },
     async getStudents() {
       const data = await request("getStudents");
       if (!Array.isArray(data)) throw new Error("Senarai murid daripada Google Sheets tidak sah.");
