@@ -12,16 +12,16 @@ export async function generateMetadata(): Promise<Metadata> {
   const origin = `${protocol}://${host}`;
   return {
     metadataBase: new URL(origin),
-    title: "SIHADIR — Headcount & Intervensi Pemulihan Khas",
+    title: "myHeadcountKT — Headcount & Intervensi Pemulihan Khas",
     description: "Sistem pengurusan headcount, perkembangan dan intervensi murid Pemulihan Khas.",
     icons: { icon: "/favicon.svg", shortcut: "/favicon.svg" },
     openGraph: {
-      title: "SIHADIR",
+      title: "myHeadcountKT",
       description: "Isi sekali. Fahami perkembangan. Bertindak tepat.",
       type: "website",
-      images: [{ url: `${origin}/og.png`, width: 1678, height: 943, alt: "SIHADIR Headcount & Intervensi Pemulihan Khas" }],
+      images: [{ url: `${origin}/og.png`, width: 1678, height: 943, alt: "myHeadcountKT Headcount & Intervensi Pemulihan Khas" }],
     },
-    twitter: { card: "summary_large_image", title: "SIHADIR", description: "Isi sekali. Fahami perkembangan. Bertindak tepat.", images: [`${origin}/og.png`] },
+    twitter: { card: "summary_large_image", title: "myHeadcountKT", description: "Isi sekali. Fahami perkembangan. Bertindak tepat.", images: [`${origin}/og.png`] },
   };
 }
 

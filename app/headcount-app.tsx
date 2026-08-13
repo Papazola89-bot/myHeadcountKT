@@ -10,7 +10,11 @@ import {
   Users, WandSparkles, X,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { createLocalDataService } from "./lib/data-service";
+import {
+  createAppsScriptDataService,
+  createLocalDataService,
+  normalizeAppsScriptStudent,
+} from "./lib/data-service";
 
 type Role = "guru" | "admin";
 type Subject = "Bahasa Melayu" | "Matematik";
@@ -50,7 +54,12 @@ const schools=[
   ["SK Bandar Penawar 2","JBA3074","Bandar",27,79,"Disahkan"],
   ["SK Sungai Rengit","JBA3044","Tanjung Surat",19,64,"Draf"],
 ];
-const service=createLocalDataService<Student>("sihadir-demo-v1");
+const appsScriptEndpoint=(process.env.NEXT_PUBLIC_GOOGLE_APPS_SCRIPT_URL||"https://script.google.com/macros/s/AKfycbxxplK0PDUs2sS0_CkVes8RB9c42dSX8ptP7ZMMXmGDJl1Nt_rO7fOMS99YN2SFChvY/exec").trim();
+const localService=createLocalDataService<Student>("myHeadcountKT-demo-v1");
+const appsScriptService=appsScriptEndpoint?createAppsScriptDataService<Student>(appsScriptEndpoint,(value)=>{
+  const student=normalizeAppsScriptStudent(value);
+  return {...student,skills:student.skills as Record<Cycle,number>};
+}):null;
 const kp=(v:number)=>v>=32?"Menguasai":`KP${v}`;
 const initials=(n:string)=>n.split(" ").slice(0,2).map(p=>p[0]).join("");
 const date=(d:string)=>new Intl.DateTimeFormat("ms-MY",{day:"numeric",month:"short",year:"numeric"}).format(new Date(d));
@@ -73,18 +82,84 @@ export default function HeadcountApp(){
   const [mobile,setMobile]=useState(false),[toast,setToast]=useState(""),[saved,setSaved]=useState("Disimpan 9:42 pagi"),[undo,setUndo]=useState<Student[]|null>(null);
   const [submission,setSubmission]=useState<Record<string,string>>({TOV:"Disahkan Admin","AR 1":"Disahkan Admin","AR 2":"Telah Dihantar","AR 3":"Draf"});
   const timer=useRef<ReturnType<typeof setTimeout>|null>(null);
-  useEffect(()=>{service.getStudents().then(x=>x.length&&setStudents(x)).catch(()=>{})},[]);
-  const announce=(m:string)=>{setToast(m);if(timer.current)clearTimeout(timer.current);timer.current=setTimeout(()=>setToast(""),2600)};
-  const persist=(next:Student[],previous?:Student[])=>{if(previous)setUndo(previous);setStudents(next);service.saveStudents(next).catch(()=>announce("Data tidak dapat disimpan."));setSaved(`Disimpan ${new Intl.DateTimeFormat("ms-MY",{hour:"numeric",minute:"2-digit"}).format(new Date())}`)};
+  const announce=(m:string)=>{setToast(m);if(timer.current)clearTimeout(timer.current);timer.current=setTimeout(()=>setToast(""),3600)};
+  useEffect(()=>{
+    let active=true;
+    const load=async()=>{
+      if(!appsScriptService){
+        const cached=await localService.getStudents();
+        if(active&&cached.length)setStudents(cached);
+        if(active)setSaved("Mod demo lokal · endpoint belum dikonfigurasi");
+        return;
+      }
+      try{
+        const remote=await appsScriptService.getStudents();
+        if(!active)return;
+        if(remote.length){setStudents(remote);await localService.saveStudents(remote)}
+        setSaved("Google Sheets disambungkan");
+      }catch(error){
+        const cached=await localService.getStudents();
+        if(!active)return;
+        if(cached.length)setStudents(cached);
+        setSaved("Mod demo lokal · Google Sheets gagal");
+        announce(`Google Sheets tidak dapat dicapai. Data demo lokal digunakan. ${error instanceof Error?error.message:""}`.trim());
+      }
+    };
+    void load();
+    return()=>{active=false};
+  },[]);
+  const persist=(next:Student[],previous?:Student[])=>{if(previous)setUndo(previous);setStudents(next);localService.saveStudents(next).catch(()=>announce("Cache lokal tidak dapat disimpan."));setSaved(`Disimpan lokal ${new Intl.DateTimeFormat("ms-MY",{hour:"numeric",minute:"2-digit"}).format(new Date())}`)};
   const filtered=useMemo(()=>students.filter(s=>(subject==="Semua"||s.subject===subject)&&(year==="Semua tahun"||s.year===Number(year.slice(-1)))&&s.name.toLowerCase().includes(query.toLowerCase())),[students,subject,year,query]);
   const menu=role==="guru"?guruMenu:adminMenu;
   const go=(v:View)=>{setView(v);setMobile(false);window.scrollTo({top:0,behavior:"smooth"})};
-  const updateSkill=(id:string,value:number)=>{const prev=students;persist(students.map(s=>s.id===id?{...s,skills:{...s.skills,[cycle]:value}}:s),prev)};
+  const updateSkill=async(id:string,value:number)=>{
+    const student=students.find(s=>s.id===id);
+    const prev=students;
+    persist(students.map(s=>s.id===id?{...s,skills:{...s.skills,[cycle]:value}}:s),prev);
+    if(!appsScriptService||!student)return;
+    try{
+      await appsScriptService.saveAssessment(id,cycle,`KP${value}`,{subject:student.subject,tahun_data:2026});
+      setSaved(`Google Sheets · ${new Intl.DateTimeFormat("ms-MY",{hour:"numeric",minute:"2-digit"}).format(new Date())}`);
+    }catch(error){
+      setSaved("Disimpan lokal · Google Sheets gagal");
+      announce(`Penilaian disimpan pada peranti sahaja. ${error instanceof Error?error.message:""}`.trim());
+    }
+  };
+  const saveIntervention=async(i:Intervention)=>{
+    setInterventions(current=>[i,...current]);setModal(null);setSelected(null);
+    if(!appsScriptService){announce("Intervensi disimpan dalam mod demo lokal.");return}
+    const student=students.find(s=>s.id===i.studentId);
+    try{
+      await appsScriptService.saveIntervention({studentId:i.studentId,skillCode:`KP${student?.skills["AR 3"]??1}`,issue:i.issue,action:i.action,method:i.method,startDate:i.start,reviewDate:i.review,status:i.status});
+      announce("Intervensi berjaya disimpan ke Google Sheets.");
+    }catch(error){
+      announce(`Intervensi disimpan pada peranti sahaja. ${error instanceof Error?error.message:""}`.trim());
+    }
+  };
+  const saveStudent=async(student:Student)=>{
+    persist([...students,student],students);setModal(null);
+    if(!appsScriptService){announce("Murid disimpan dalam mod demo lokal.");return}
+    try{
+      await appsScriptService.saveStudent({studentId:student.id,name:student.name,year:student.year,className:student.className,subject:student.subject,status:student.status,startDate:student.startDate});
+      announce("Murid baharu berjaya disimpan ke Google Sheets.");
+    }catch(error){
+      announce(`Murid disimpan pada peranti sahaja. ${error instanceof Error?error.message:""}`.trim());
+    }
+  };
+  const submitCurrentCycle=async()=>{
+    if(!appsScriptService){setSubmission(current=>({...current,[cycle]:"Telah Dihantar"}));setModal(null);announce(`Data ${cycle} ditanda dihantar dalam mod demo lokal.`);return}
+    try{
+      await appsScriptService.submitCycle(cycle,{subject:subject==="Semua"?"Bahasa Melayu":subject,tahun:2026});
+      setSubmission(current=>({...current,[cycle]:"Telah Dihantar"}));setModal(null);announce(`Data ${cycle} telah dihantar dan direkodkan dalam Google Sheets.`);
+    }catch(error){
+      setModal(null);announce(`Penghantaran gagal; data kekal sebagai draf. ${error instanceof Error?error.message:""}`.trim());
+    }
+  };
   const exportCsv=()=>{const rows=[["ID","Nama","Tahun","Kelas","Subjek",...cycles],...filtered.map(s=>[s.id,s.name,s.year,s.className,s.subject,...cycles.map(c=>kp(s.skills[c]))])];const csv=rows.map(r=>r.map(x=>`"${x}"`).join(",")).join("\n");const a=document.createElement("a");a.href=URL.createObjectURL(new Blob(["\ufeff",csv],{type:"text/csv"}));a.download=`headcount-${cycle.replace(" ","-")}.csv`;a.click();URL.revokeObjectURL(a.href);announce("Fail CSV telah dijana.")};
   const props={students:filtered,allStudents:students,cycle,setCycle,subject,setSubject,year,setYear,query,setQuery,go,setSelected,announce,exportCsv};
   return <div className="app-shell">
     <aside className={`sidebar ${mobile?"open":""}`}>
-      <div className="brand"><b><GraduationCap size={23}/></b><span><strong>SIHADIR</strong><small>Headcount & Intervensi</small></span><button onClick={()=>setMobile(false)}><X size={20}/></button></div>
+      <div className="brand"><b><GraduationCap size={23}/></b><span><strong>myHeadcountKT</strong><small>Headcount & Intervensi</small></span><button onClick={()=>setMobile(false)}><X size={20}/></button></div>
       <div className="school-card"><i><School size={20}/></i><span><small>{role==="guru"?"Sekolah anda":"Pentadbir sistem"}</small><strong>{role==="guru"?"SK Semangar":"PPD Kota Tinggi"}</strong><em>{role==="guru"?"JBA3012 · Zon Bandar":"Johor"}</em></span></div>
       <nav><p>MENU UTAMA</p>{menu.map(([key,label,Icon])=><button key={key} className={view===key?"active":""} onClick={()=>go(key)}><Icon size={19}/><span>{label}</span>{key==="interventions"&&<em>{role==="guru"?4:18}</em>}</button>)}</nav>
       <div className="side-bottom"><button onClick={()=>go("settings")}><Settings size={19}/>Profil & Tetapan</button><button><HelpCircle size={19}/>Bantuan</button><div><b className="avatar">{role==="guru"?"NA":"AD"}</b><span><strong>{role==="guru"?"Nur Aina":"Admin PPD"}</strong><small>{role==="guru"?"Guru Pemulihan Khas":"Pentadbir Daerah"}</small></span><LogOut size={17}/></div></div>
@@ -101,9 +176,9 @@ export default function HeadcountApp(){
       </div>
     </main>
     {selected&&!modal&&<StudentDrawer student={selected} close={()=>setSelected(null)} intervention={()=>setModal("intervention")}/>} 
-    {modal==="add"&&<AddModal close={()=>setModal(null)} save={s=>{persist([...students,s],students);setModal(null);announce("Murid baharu berjaya ditambah.")}}/>}
-    {modal==="intervention"&&<InterventionModal students={students} selected={selected} close={()=>{setModal(null);setSelected(null)}} save={i=>{setInterventions([i,...interventions]);setModal(null);setSelected(null);announce("Intervensi berjaya direkodkan.")}}/>}
-    {modal==="submit"&&<Confirm cycle={cycle} close={()=>setModal(null)} confirm={()=>{setSubmission({...submission,[cycle]:"Telah Dihantar"});setModal(null);announce(`Data ${cycle} telah dihantar kepada admin.`)}}/>}
+    {modal==="add"&&<AddModal close={()=>setModal(null)} save={s=>{void saveStudent(s)}}/>}
+    {modal==="intervention"&&<InterventionModal students={students} selected={selected} close={()=>{setModal(null);setSelected(null)}} save={i=>{void saveIntervention(i)}}/>}
+    {modal==="submit"&&<Confirm cycle={cycle} close={()=>setModal(null)} confirm={()=>{void submitCurrentCycle()}}/>}
     {toast&&<div className="toast"><CheckCircle2 size={19}/>{toast}</div>}
   </div>
 }

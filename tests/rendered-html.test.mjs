@@ -12,12 +12,12 @@ async function render() {
   );
 }
 
-test("renders the SIHADIR product shell", async () => {
+test("renders the myHeadcountKT product shell", async () => {
   const response = await render();
   assert.equal(response.status, 200);
   assert.match(response.headers.get("content-type") ?? "", /^text\/html\b/i);
   const html = await response.text();
-  assert.match(html, /SIHADIR/);
+  assert.match(html, /myHeadcountKT/);
   assert.match(html, /Headcount &amp; Intervensi/);
   assert.match(html, /PORTAL GURU/);
   assert.match(html, /Selamat datang, Cikgu Aina/);
