@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
+import ts from "typescript";
 
 async function render() {
   const workerUrl = new URL("../dist/server/index.js", import.meta.url);
@@ -53,6 +54,27 @@ test("loads and updates the authenticated Google Sheets profile", async () => {
   assert.match(serviceSource, /saveProfile/);
   assert.match(backendSource, /getProfile: getProfile_/);
   assert.match(backendSource, /saveProfile: saveProfile_/);
+});
+
+test("all enabled portal buttons expose an action", async () => {
+  const source = await readFile(new URL("../app/headcount-app.tsx", import.meta.url), "utf8");
+  const file = ts.createSourceFile("headcount-app.tsx", source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  const inert = [];
+  const walk = (node) => {
+    if (ts.isJsxElement(node) || ts.isJsxSelfClosingElement(node)) {
+      const opening = ts.isJsxElement(node) ? node.openingElement : node;
+      if (opening.tagName.getText(file) === "button") {
+        const attrs = opening.attributes.properties;
+        const hasClick = attrs.some((attr) => ts.isJsxAttribute(attr) && attr.name.text === "onClick");
+        const disabled = attrs.some((attr) => ts.isJsxAttribute(attr) && attr.name.text === "disabled");
+        if (!hasClick && !disabled) inert.push(opening.getText(file));
+      }
+    }
+    ts.forEachChild(node, walk);
+  };
+  walk(file);
+  assert.deepEqual(inert, []);
+  assert.match(source, /className="side-logout" onClick=\{signOutGoogle\}/);
 });
 
 test("includes product-specific social metadata", async () => {
