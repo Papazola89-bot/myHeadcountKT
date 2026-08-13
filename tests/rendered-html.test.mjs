@@ -22,7 +22,9 @@ test("renders the myHeadcountKT product shell", async () => {
   assert.match(html, /myHeadcountKT/);
   assert.match(html, /Headcount &amp; Intervensi/);
   assert.match(html, /Log masuk ke myHeadcountKT/);
-  assert.match(html, /Data murid tidak dipaparkan sebelum login/);
+  assert.match(html, /Data tidak dipaparkan sebelum akses disahkan/);
+  assert.match(html, /Kod akses rahsia sekolah/);
+  assert.match(html, /Masuk sebagai Guru/);
   assert.match(html, /\/logos\/ppd-kota-tinggi\.png/);
   assert.match(html, /\/logos\/spb-ppdkt\.png/);
   assert.match(html, /\/logos\/m3p-johor\.png/);
@@ -74,7 +76,37 @@ test("all enabled portal buttons expose an action", async () => {
   };
   walk(file);
   assert.deepEqual(inert, []);
-  assert.match(source, /className="side-logout" onClick=\{signOutGoogle\}/);
+  assert.match(source, /className="side-logout" onClick=\{signOut\}/);
+});
+
+test("school-code sessions are isolated from Google admin sessions", async () => {
+  const [appSource, serviceSource] = await Promise.all([
+    readFile(new URL("../app/headcount-app.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/lib/data-service.ts", import.meta.url), "utf8"),
+  ]);
+  assert.match(appSource, /authMethod==="school"\?\{\.\.\.currentProfile,role:"GURU"/);
+  assert.match(appSource, /currentProfile\.role!=="ADMIN"/);
+  assert.match(serviceSource, /action: "loginSchool"/);
+  assert.match(serviceSource, /schoolSessionToken/);
+  assert.match(serviceSource, /session_token/);
+});
+
+test("owner-only admin and safe operational reset are enforced", async () => {
+  const [appSource, serviceSource, backendSource] = await Promise.all([
+    readFile(new URL("../app/headcount-app.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/lib/data-service.ts", import.meta.url), "utf8"),
+    readFile(new URL("../google-apps-script/Code.gs", import.meta.url), "utf8"),
+  ]);
+  assert.match(appSource, /KOSONGKAN SEMUA DATA/);
+  assert.match(appSource, /Kod akses rahsia sekolah/);
+  assert.match(appSource, /rotateSchoolCode/);
+  assert.doesNotMatch(appSource, /Guru Contoh|Farah Nabila|Mohd Azlan|Siti Rafidah/);
+  assert.doesNotMatch(appSource, /KP12\.4|\+7\.3 KP|Laporan Headcount AR 2/);
+  assert.match(serviceSource, /request\("rotateSchoolAccessCode"/);
+  assert.match(serviceSource, /request\("clearAllData"/);
+  assert.match(backendSource, /assertOwnerAdminIdentity_\(user\)/);
+  assert.match(backendSource, /KOSONGKAN SEMUA DATA/);
+  assert.match(backendSource, /preserved: \["SEKOLAH", "MASTER_KEMAHIRAN", "OWNER_ADMIN"\]/);
 });
 
 test("school administration uses Google Sheets rather than hardcoded demo rows", async () => {

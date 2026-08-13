@@ -4,27 +4,36 @@
  * Persediaan sekali sahaja:
  * 1. Ikat projek Apps Script ini kepada satu Google Spreadsheet.
  * 2. Jalankan setupDatabase() daripada editor Apps Script.
- * 3. Deploy sebagai Web App yang dijalankan sebagai pemilik skrip. Akses data
- *    tetap memerlukan Google ID token dan rekod aktif dalam PENGGUNA.
+ * 3. Deploy sebagai Web App yang dijalankan sebagai pemilik skrip. Pentadbir
+ *    menggunakan Google ID token; guru menggunakan kod akses rahsia sekolah.
  *
  * Untuk projek Apps Script standalone, jalankan:
  * setupDatabase("SPREADSHEET_ID_ANDA");
  *
  * Keselamatan penting: semua tindakan data mendapatkan school_id daripada
- * rekod PENGGUNA di pelayan. school_id yang dihantar oleh guru tidak dipercayai.
+ * identiti pelayan. school_id dan role yang dihantar oleh klien tidak dipercayai.
  */
 
 var API_NAME = "myHeadcountKT";
-var API_VERSION = "1.0.0";
+var API_VERSION = "1.1.0";
 var DATABASE_ID_PROPERTY = "DATABASE_SPREADSHEET_ID";
+var OWNER_ADMIN_EMAIL_PROPERTY = "OWNER_ADMIN_EMAIL";
+var SCHOOL_SESSION_EPOCH_PROPERTY = "SCHOOL_SESSION_EPOCH";
 var GOOGLE_CLIENT_ID = "491720020946-9f6ifkrt5nrrpu4a7dsqeunv9iu0ell6.apps.googleusercontent.com";
 var GOOGLE_TOKENINFO_URL = "https://oauth2.googleapis.com/tokeninfo";
 var ID_TOKEN_CACHE_SECONDS = 300;
 var ID_TOKEN_CLOCK_SKEW_SECONDS = 300;
 var ID_TOKEN_MAX_AGE_SECONDS = 7200;
+var SCHOOL_SESSION_SECONDS = 21600;
+var SCHOOL_ACCESS_CODE_MIN_LENGTH = 12;
+var SCHOOL_LOGIN_MAX_FAILURES = 5;
+var SCHOOL_LOGIN_LOCK_SECONDS = 900;
 
 var TABLES = {
-  SEKOLAH: ["school_id", "kod_sekolah", "nama_sekolah", "zon", "status"],
+  SEKOLAH: [
+    "school_id", "kod_sekolah", "nama_sekolah", "zon", "status",
+    "access_code_hash", "access_code_salt", "access_code_last4", "access_code_updated_at"
+  ],
   PENGGUNA: ["user_id", "google_sub", "email", "nama", "role", "school_id", "status"],
   MURID: ["student_id", "school_id", "nama", "tahun", "kelas", "tarikh_mula", "subject", "status"],
   PENILAIAN: ["assessment_id", "student_id", "subject", "tahun_data", "cycle", "skill_code", "tarikh", "teacher_id", "timestamp"],
@@ -57,6 +66,9 @@ function setupDatabase(spreadsheetId) {
   }
 
   PropertiesService.getScriptProperties().setProperty(DATABASE_ID_PROPERTY, ss.getId());
+  if (!PropertiesService.getScriptProperties().getProperty(SCHOOL_SESSION_EPOCH_PROPERTY)) {
+    PropertiesService.getScriptProperties().setProperty(SCHOOL_SESSION_EPOCH_PROPERTY, "1");
+  }
 
   Object.keys(TABLES).forEach(function (name) {
     ensureSheet_(ss, name, TABLES[name]);
@@ -77,75 +89,9 @@ function setupDatabase(spreadsheetId) {
   return result;
 }
 
-/**
- * Data contoh pilihan. Jalankan secara manual selepas setupDatabase().
- * Fungsi ini idempoten: rekod yang sama tidak akan digandakan.
- * Tetapkan Script Property DEMO_GURU_EMAIL jika mahu mencipta akaun guru demo.
- */
+/** Data demo dinyahaktifkan supaya pangkalan data produksi kekal kosong. */
 function seedDemoData() {
-  var ss = database_();
-  var schoolId = "SCH-DEMO";
-  var added = { schools: 0, users: 0, students: 0 };
-
-  if (!findRow_("SEKOLAH", function (row) { return same_(row.school_id, schoolId); }, ss)) {
-    appendRecord_("SEKOLAH", {
-      school_id: schoolId,
-      kod_sekolah: "JBA3012",
-      nama_sekolah: "SK Semangar (Demo)",
-      zon: "Bandar",
-      status: "Aktif"
-    }, ss);
-    added.schools += 1;
-  }
-
-  var demoStudents = [
-    { student_id: "ST-DEMO-001", nama: "Nur Mira Sofea", tahun: 2, kelas: "2 Bijak", subject: "Bahasa Melayu", skill: "KP10" },
-    { student_id: "ST-DEMO-002", nama: "Muhammad Ali Haziq", tahun: 2, kelas: "2 Bijak", subject: "Bahasa Melayu", skill: "KP6" },
-    { student_id: "ST-DEMO-003", nama: "Daniel Lee Jun Wei", tahun: 2, kelas: "2 Bestari", subject: "Matematik", skill: "KP25" }
-  ];
-
-  demoStudents.forEach(function (student) {
-    if (!findRow_("MURID", function (row) { return same_(row.student_id, student.student_id); }, ss)) {
-      appendRecord_("MURID", {
-        student_id: student.student_id,
-        school_id: schoolId,
-        nama: student.nama,
-        tahun: student.tahun,
-        kelas: student.kelas,
-        tarikh_mula: new Date(),
-        subject: student.subject,
-        status: "Aktif"
-      }, ss);
-      appendRecord_("PENILAIAN", {
-        assessment_id: Utilities.getUuid(),
-        student_id: student.student_id,
-        subject: student.subject,
-        tahun_data: new Date().getFullYear(),
-        cycle: "TOV",
-        skill_code: student.skill,
-        tarikh: new Date(),
-        teacher_id: "SEED",
-        timestamp: new Date()
-      }, ss);
-      added.students += 1;
-    }
-  });
-
-  var demoEmail = String(PropertiesService.getScriptProperties().getProperty("DEMO_GURU_EMAIL") || "").trim().toLowerCase();
-  if (demoEmail && !findRow_("PENGGUNA", function (row) { return lower_(row.email) === demoEmail; }, ss)) {
-    appendRecord_("PENGGUNA", {
-      user_id: Utilities.getUuid(),
-      email: demoEmail,
-      nama: "Guru Demo",
-      role: "GURU",
-      school_id: schoolId,
-      status: "Aktif"
-    }, ss);
-    added.users += 1;
-  }
-
-  Logger.log(JSON.stringify({ ok: true, added: added }));
-  return { ok: true, added: added };
+  throw apiError_("DEMO_DISABLED", "Data demo telah dinyahaktifkan untuk sistem produksi.");
 }
 
 /** Health check awam. Tidak memulangkan data sekolah atau pengguna. */
@@ -177,14 +123,18 @@ function doPost(e) {
     // sebagai kekunci dan menyebabkan action "getStudents" sentiasa ditolak.
     var handlers = {
       getHealth: getHealth_,
+      loginSchool: loginSchool_,
+      logoutSchool: logoutSchool_,
       getProfile: getProfile_,
       saveProfile: saveProfile_,
       getStudents: getStudents_,
       saveStudent: saveStudent_,
       getSchools: getSchools_,
       saveSchool: saveSchool_,
+      rotateSchoolAccessCode: rotateSchoolAccessCode_,
       deleteSchool: deleteSchool_,
       clearSchools: clearSchools_,
+      clearAllData: clearAllData_,
       getInterventions: getInterventions_,
       saveAssessment: saveAssessment_,
       saveIntervention: saveIntervention_,
@@ -195,8 +145,9 @@ function doPost(e) {
       throw apiError_("ACTION_NOT_FOUND", "Tindakan API tidak sah: " + action);
     }
 
-    // Health check tidak membaca data domain dan boleh dipanggil sebelum login.
-    var user = action === "getHealth" ? null : currentUser_(input);
+    // Hanya health dan pertukaran kod sekolah kepada sesi boleh dibuat tanpa sesi.
+    var publicActions = { getHealth: true, loginSchool: true };
+    var user = publicActions[action] ? null : currentUser_(input);
     var data = handlers[action](input, user);
     return successResponse_(data, action, requestId);
   } catch (error) {
@@ -227,11 +178,63 @@ function getHealth_() {
   };
 }
 
+/**
+ * Tukar kod akses rahsia sekolah kepada sesi guru berjangka pendek.
+ * Kod tidak pernah disimpan atau dipulangkan semula selepas konfigurasi.
+ */
+function loginSchool_(input) {
+  var accessCode = normalizeSchoolAccessCode_(
+    input.schoolCode || input.school_code || input.accessCode || input.access_code || input.code
+  );
+  var cache = CacheService.getScriptCache();
+  var attemptKey = "school-login-fail:" + tokenHash_(accessCode);
+  var failures = Number(cache.get(attemptKey) || 0);
+  if (failures >= SCHOOL_LOGIN_MAX_FAILURES) {
+    throw apiError_("LOGIN_RATE_LIMITED", "Terlalu banyak cubaan. Cuba semula selepas 15 minit.");
+  }
+
+  var school = null;
+  rows_("SEKOLAH").some(function (candidate) {
+    if (upper_(candidate.status) !== "AKTIF") return false;
+    var salt = text_(candidate.access_code_salt);
+    var expectedHash = text_(candidate.access_code_hash);
+    if (!salt || !expectedHash) return false;
+    if (!constantTimeEquals_(hashSchoolAccessCode_(accessCode, salt), expectedHash)) return false;
+    school = candidate;
+    return true;
+  });
+
+  if (!school) {
+    cache.put(attemptKey, String(failures + 1), SCHOOL_LOGIN_LOCK_SECONDS);
+    throw apiError_("INVALID_SCHOOL_CODE", "Kod sekolah tidak sah atau sekolah tidak aktif.");
+  }
+
+  cache.remove(attemptKey);
+  var session = createSchoolSession_(school);
+  return {
+    session_token: session.token,
+    expires_in: SCHOOL_SESSION_SECONDS,
+    profile: publicUserProfile_(session.user)
+  };
+}
+
+function logoutSchool_(input, user) {
+  if (!user || user._auth_type !== "SCHOOL_CODE") {
+    throw apiError_("INVALID_AUTH_METHOD", "Log keluar sesi sekolah memerlukan sesi kod sekolah.");
+  }
+  var token = schoolSessionTokenFromInput_(input);
+  CacheService.getScriptCache().remove(schoolSessionCacheKey_(token));
+  return { logged_out: true };
+}
+
 function getProfile_(input, user) {
   return publicUserProfile_(user);
 }
 
 function saveProfile_(input, user) {
+  if (user && user._auth_type === "SCHOOL_CODE") {
+    throw apiError_("PROFILE_NOT_AVAILABLE", "Sesi kod sekolah tidak mempunyai profil guru peribadi.");
+  }
   var name = requiredText_(input.name || input.nama, "name", 120);
   return withWriteLock_(function () {
     var existing = findRow_("PENGGUNA", function (row) {
@@ -260,7 +263,8 @@ function publicUserProfile_(user) {
     school_id: schoolId,
     school_name: school ? text_(school.nama_sekolah) : "",
     school_code: school ? text_(school.kod_sekolah) : "",
-    school_zone: school ? text_(school.zon) : ""
+    school_zone: school ? text_(school.zon) : "",
+    auth_method: text_(user._auth_type) || "GOOGLE"
   };
 }
 
@@ -336,7 +340,9 @@ function getSchools_(input, user) {
       }).length,
       student_count: schoolStudents.length,
       achievement_percent: schoolStudents.length ? Math.round(achieved / schoolStudents.length * 100) : 0,
-      submission_status: schoolSubmissions.length ? text_(schoolSubmissions[0].status) : "Belum mula"
+      submission_status: schoolSubmissions.length ? text_(schoolSubmissions[0].status) : "Belum mula",
+      access_code_configured: Boolean(text_(school.access_code_hash) && text_(school.access_code_salt)),
+      access_code_last4: text_(school.access_code_last4)
     };
   });
 }
@@ -348,6 +354,7 @@ function saveSchool_(input, user) {
   var name = requiredText_(input.name || input.nama_sekolah, "name", 200);
   var zone = requiredText_(input.zone || input.zon, "zone", 100);
   var status = upper_(input.status || "AKTIF") === "AKTIF" ? "Aktif" : "Tidak Aktif";
+  var requestedAccessCode = optionalText_(input.accessCode || input.access_code, 100);
 
   return withWriteLock_(function () {
     var existing = schoolId ? findRow_("SEKOLAH", function (row) { return same_(row.school_id, schoolId); }) : null;
@@ -364,10 +371,50 @@ function saveSchool_(input, user) {
       zon: zone,
       status: status
     };
+    var issuedAccessCode = "";
+    if (!existing || requestedAccessCode) {
+      issuedAccessCode = requestedAccessCode
+        ? normalizeSchoolAccessCode_(requestedAccessCode)
+        : generateSchoolAccessCode_();
+      assertSchoolAccessCodeAvailable_(issuedAccessCode, record.school_id);
+      var accessFields = schoolAccessCodeFields_(issuedAccessCode);
+      Object.keys(accessFields).forEach(function (key) { record[key] = accessFields[key]; });
+    }
     if (existing) updateRecord_("SEKOLAH", existing._row, record);
     else appendRecord_("SEKOLAH", record);
-    audit_(user, "SAVE_SCHOOL", existing || null, record);
-    return publicRow_(record);
+    var savedRecord = existing ? mergeRecord_(existing, record) : record;
+    audit_(user, "SAVE_SCHOOL", publicSchoolRecord_(existing), publicSchoolRecord_(savedRecord));
+    var response = publicSchoolRecord_(savedRecord);
+    // Rahsia dipulangkan sekali sahaja supaya admin boleh menyerahkannya kepada sekolah.
+    if (issuedAccessCode) response.access_code = issuedAccessCode;
+    return response;
+  });
+}
+
+function rotateSchoolAccessCode_(input, user) {
+  assertAdmin_(user);
+  var schoolId = requiredText_(input.schoolId || input.school_id, "schoolId", 100);
+  var requested = optionalText_(input.accessCode || input.access_code, 100);
+  return withWriteLock_(function () {
+    var school = findRow_("SEKOLAH", function (row) { return same_(row.school_id, schoolId); });
+    if (!school) throw apiError_("SCHOOL_NOT_FOUND", "Sekolah tidak ditemui.");
+    var issuedAccessCode = requested ? normalizeSchoolAccessCode_(requested) : generateSchoolAccessCode_();
+    assertSchoolAccessCodeAvailable_(issuedAccessCode, schoolId);
+    var fields = schoolAccessCodeFields_(issuedAccessCode);
+    updateRecord_("SEKOLAH", school._row, fields);
+    audit_(user, "ROTATE_SCHOOL_ACCESS_CODE", {
+      school_id: schoolId,
+      access_code_last4: text_(school.access_code_last4)
+    }, {
+      school_id: schoolId,
+      access_code_last4: fields.access_code_last4
+    });
+    return {
+      school_id: schoolId,
+      access_code: issuedAccessCode,
+      access_code_last4: fields.access_code_last4,
+      access_code_updated_at: fields.access_code_updated_at
+    };
   });
 }
 
@@ -378,7 +425,7 @@ function deleteSchool_(input, user) {
     var school = findRow_("SEKOLAH", function (row) { return same_(row.school_id, schoolId); });
     if (!school) throw apiError_("SCHOOL_NOT_FOUND", "Sekolah tidak ditemui.");
     assertSchoolUnused_(schoolId);
-    audit_(user, "DELETE_SCHOOL", publicRow_(school), null);
+    audit_(user, "DELETE_SCHOOL", publicSchoolRecord_(school), null);
     deleteRecord_("SEKOLAH", school._row);
     return { deleted: true, school_id: schoolId };
   });
@@ -401,6 +448,60 @@ function clearSchools_(input, user) {
     audit_(user, "CLEAR_SCHOOLS", { deleted_count: schools.length }, null);
     clearDataRows_("SEKOLAH");
     return { cleared: true, deleted_count: schools.length };
+  });
+}
+
+/**
+ * Kosongkan semua data operasi tanpa memadam konfigurasi sistem.
+ * Dikekalkan: SEKOLAH (termasuk hash kod akses), MASTER_KEMAHIRAN dan akaun
+ * Google pemilik. Semua sesi kod sekolah sedia ada dibatalkan melalui epoch.
+ */
+function clearAllData_(input, user) {
+  assertAdmin_(user);
+  if (text_(input.confirmation) !== "KOSONGKAN SEMUA DATA") {
+    throw apiError_("CONFIRMATION_REQUIRED", "Taip KOSONGKAN SEMUA DATA untuk mengesahkan tindakan ini.");
+  }
+
+  return withWriteLock_(function () {
+    var ownerEmail = ownerAdminEmail_();
+    var adminRecord = {
+      user_id: text_(user.user_id) || Utilities.getUuid(),
+      google_sub: text_(user.google_sub),
+      email: ownerEmail,
+      nama: text_(user.nama) || "Pentadbir Sistem",
+      role: "ADMIN",
+      school_id: "",
+      status: "Aktif"
+    };
+    var clearedTables = ["MURID", "PENILAIAN", "SASARAN", "INTERVENSI", "SUBMISSION", "AUDIT_LOG"];
+    var deleted = {};
+
+    clearedTables.forEach(function (name) {
+      deleted[name] = rows_(name).length;
+      clearDataRows_(name);
+    });
+    deleted.PENGGUNA = rows_("PENGGUNA").filter(function (row) {
+      return lower_(row.email) !== ownerEmail;
+    }).length;
+    clearDataRows_("PENGGUNA");
+    appendRecord_("PENGGUNA", adminRecord);
+    bumpSchoolSessionEpoch_();
+
+    audit_(adminRecord, "CLEAR_ALL_DATA", {
+      deleted: deleted
+    }, {
+      preserved: ["SEKOLAH", "MASTER_KEMAHIRAN", "OWNER_ADMIN"]
+    });
+    return {
+      cleared: true,
+      deleted: deleted,
+      preserved: {
+        schools: rows_("SEKOLAH").length,
+        master_skills: rows_("MASTER_KEMAHIRAN").length,
+        owner_admin: ownerEmail
+      },
+      school_sessions_revoked: true
+    };
   });
 }
 
@@ -693,6 +794,10 @@ function submitCycle_(input, user) {
 }
 
 function currentUser_(input) {
+  if (hasSchoolSessionToken_(input)) {
+    return verifySchoolSession_(input);
+  }
+
   var identity = verifyGoogleIdToken_(input);
   var user = findUserByGoogleIdentity_(identity);
   if (upper_(user.status) !== "AKTIF") {
@@ -700,11 +805,92 @@ function currentUser_(input) {
   }
 
   user.role = normalizeRole_(user.role);
-  if (user.role === "GURU") {
-    user.school_id = requiredText_(user.school_id, "school_id pengguna", 100);
-    assertSchoolActive_(user.school_id);
-  }
+  user._auth_type = "GOOGLE";
+  user._identity_email = identity.email;
+  // Google hanya pintu masuk pemilik/admin. Semua guru mesti menggunakan kod
+  // akses sekolah dan tidak boleh menaik taraf peranan melalui rekod PENGGUNA.
+  assertOwnerAdminIdentity_(user);
+  user.role = "ADMIN";
+  user.school_id = "";
   return user;
+}
+
+function hasSchoolSessionToken_(input) {
+  return Boolean(input && (input.schoolSessionToken || input.school_session_token || input.sessionToken || input.session_token));
+}
+
+function schoolSessionTokenFromInput_(input) {
+  return requiredText_(
+    input && (input.schoolSessionToken || input.school_session_token || input.sessionToken || input.session_token),
+    "session_token",
+    500
+  );
+}
+
+function schoolSessionCacheKey_(token) {
+  return "school-session:" + tokenHash_(token);
+}
+
+function createSchoolSession_(school) {
+  var token = tokenHash_(Utilities.getUuid() + ":" + Utilities.getUuid() + ":" + new Date().getTime());
+  var now = new Date().getTime();
+  var payload = {
+    school_id: text_(school.school_id),
+    epoch: schoolSessionEpoch_(),
+    code_version: dateMillis_(school.access_code_updated_at),
+    issued_at: now,
+    expires_at: now + SCHOOL_SESSION_SECONDS * 1000
+  };
+  CacheService.getScriptCache().put(
+    schoolSessionCacheKey_(token),
+    JSON.stringify(payload),
+    SCHOOL_SESSION_SECONDS
+  );
+  return { token: token, user: schoolSessionUser_(school) };
+}
+
+function verifySchoolSession_(input) {
+  var token = schoolSessionTokenFromInput_(input);
+  var cache = CacheService.getScriptCache();
+  var cacheKey = schoolSessionCacheKey_(token);
+  var raw = cache.get(cacheKey);
+  if (!raw) throw apiError_("SCHOOL_SESSION_EXPIRED", "Sesi sekolah tamat. Masukkan semula kod sekolah.");
+
+  var payload;
+  try {
+    payload = JSON.parse(raw);
+  } catch (error) {
+    cache.remove(cacheKey);
+    throw apiError_("INVALID_SCHOOL_SESSION", "Sesi sekolah tidak sah.");
+  }
+  if (!payload || Number(payload.expires_at) <= new Date().getTime() || Number(payload.epoch) !== schoolSessionEpoch_()) {
+    cache.remove(cacheKey);
+    throw apiError_("SCHOOL_SESSION_EXPIRED", "Sesi sekolah tamat. Masukkan semula kod sekolah.");
+  }
+
+  var school = findRow_("SEKOLAH", function (row) { return same_(row.school_id, payload.school_id); });
+  if (!school || upper_(school.status) !== "AKTIF") {
+    cache.remove(cacheKey);
+    throw apiError_("SCHOOL_INACTIVE", "Sekolah ini tidak aktif.");
+  }
+  if (dateMillis_(school.access_code_updated_at) !== Number(payload.code_version)) {
+    cache.remove(cacheKey);
+    throw apiError_("SCHOOL_SESSION_REVOKED", "Kod sekolah telah ditukar. Masukkan kod baharu.");
+  }
+  return schoolSessionUser_(school);
+}
+
+function schoolSessionUser_(school) {
+  return {
+    user_id: "SCHOOL-" + text_(school.school_id),
+    google_sub: "",
+    email: "",
+    nama: "Guru " + (text_(school.nama_sekolah) || text_(school.kod_sekolah)),
+    role: "GURU",
+    school_id: text_(school.school_id),
+    status: "Aktif",
+    _auth_type: "SCHOOL_CODE"
+  };
 }
 
 /**
@@ -853,6 +1039,89 @@ function validateGoogleClaims_(claims) {
 function tokenHash_(token) {
   var digest = Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, token, Utilities.Charset.UTF_8);
   return Utilities.base64EncodeWebSafe(digest).replace(/=+$/g, "");
+}
+
+function normalizeSchoolAccessCode_(value) {
+  var code = upper_(requiredText_(value, "schoolCode", 100));
+  if (code.length < SCHOOL_ACCESS_CODE_MIN_LENGTH || !/[A-Z]/.test(code) || !/[0-9]/.test(code)) {
+    throw apiError_(
+      "WEAK_SCHOOL_CODE",
+      "Kod akses sekolah mesti sekurang-kurangnya " + SCHOOL_ACCESS_CODE_MIN_LENGTH + " aksara serta mengandungi huruf dan nombor."
+    );
+  }
+  if (!/^[A-Z0-9-]+$/.test(code)) {
+    throw apiError_("INVALID_SCHOOL_CODE_FORMAT", "Kod akses sekolah hanya boleh mengandungi huruf, nombor dan tanda sempang.");
+  }
+  return code;
+}
+
+function generateSchoolAccessCode_() {
+  return "KT-" + Utilities.getUuid().replace(/-/g, "").slice(0, 16).toUpperCase();
+}
+
+function hashSchoolAccessCode_(code, salt) {
+  return tokenHash_(text_(salt) + ":" + normalizeSchoolAccessCode_(code));
+}
+
+function schoolAccessCodeFields_(code) {
+  var normalized = normalizeSchoolAccessCode_(code);
+  var salt = tokenHash_(Utilities.getUuid() + ":" + new Date().getTime());
+  return {
+    access_code_hash: hashSchoolAccessCode_(normalized, salt),
+    access_code_salt: salt,
+    access_code_last4: normalized.slice(-4),
+    access_code_updated_at: new Date()
+  };
+}
+
+function assertSchoolAccessCodeAvailable_(code, ownSchoolId) {
+  var normalized = normalizeSchoolAccessCode_(code);
+  var duplicate = rows_("SEKOLAH").some(function (school) {
+    if (same_(school.school_id, ownSchoolId)) return false;
+    var salt = text_(school.access_code_salt);
+    var expected = text_(school.access_code_hash);
+    return Boolean(salt && expected && constantTimeEquals_(hashSchoolAccessCode_(normalized, salt), expected));
+  });
+  if (duplicate) throw apiError_("DUPLICATE_SCHOOL_ACCESS_CODE", "Kod akses ini sudah digunakan oleh sekolah lain.");
+}
+
+function constantTimeEquals_(left, right) {
+  var a = text_(left);
+  var b = text_(right);
+  var mismatch = a.length ^ b.length;
+  var length = Math.max(a.length, b.length);
+  for (var i = 0; i < length; i += 1) {
+    mismatch |= (a.charCodeAt(i % Math.max(a.length, 1)) || 0) ^ (b.charCodeAt(i % Math.max(b.length, 1)) || 0);
+  }
+  return mismatch === 0;
+}
+
+function publicSchoolRecord_(school) {
+  if (!school || typeof school !== "object") return school;
+  return {
+    school_id: text_(school.school_id),
+    kod_sekolah: text_(school.kod_sekolah),
+    nama_sekolah: text_(school.nama_sekolah),
+    zon: text_(school.zon),
+    status: text_(school.status) || "Aktif",
+    access_code_configured: Boolean(text_(school.access_code_hash) && text_(school.access_code_salt)),
+    access_code_last4: text_(school.access_code_last4),
+    access_code_updated_at: school.access_code_updated_at || ""
+  };
+}
+
+function schoolSessionEpoch_() {
+  var properties = PropertiesService.getScriptProperties();
+  var epoch = Number(properties.getProperty(SCHOOL_SESSION_EPOCH_PROPERTY) || 1);
+  if (!Number.isFinite(epoch) || epoch < 1) epoch = 1;
+  properties.setProperty(SCHOOL_SESSION_EPOCH_PROPERTY, String(epoch));
+  return epoch;
+}
+
+function bumpSchoolSessionEpoch_() {
+  var next = schoolSessionEpoch_() + 1;
+  PropertiesService.getScriptProperties().setProperty(SCHOOL_SESSION_EPOCH_PROPERTY, String(next));
+  return next;
 }
 
 /** Guru sentiasa dipaksa kepada school_id sendiri; admin boleh memilih sekolah. */
@@ -1083,10 +1352,15 @@ function audit_(user, action, before, after) {
 }
 
 function seedBootstrapAdmin_(ss) {
-  var email = String(Session.getEffectiveUser().getEmail() || "").trim().toLowerCase();
+  var properties = PropertiesService.getScriptProperties();
+  var email = String(properties.getProperty(OWNER_ADMIN_EMAIL_PROPERTY) || Session.getEffectiveUser().getEmail() || "").trim().toLowerCase();
   if (!email) return { created: false, reason: "effective_user_email_unavailable" };
+  properties.setProperty(OWNER_ADMIN_EMAIL_PROPERTY, email);
   var existing = findRow_("PENGGUNA", function (row) { return lower_(row.email) === email; }, ss);
-  if (existing) return { created: false, email: email, reason: "already_exists" };
+  if (existing) {
+    updateRecord_("PENGGUNA", existing._row, { role: "ADMIN", school_id: "", status: "Aktif" }, ss);
+    return { created: false, email: email, reason: "already_exists" };
+  }
 
   appendRecord_("PENGGUNA", {
     user_id: Utilities.getUuid(),
@@ -1153,6 +1427,21 @@ function normalizeRole_(value) {
 function assertAdmin_(user) {
   if (!user || normalizeRole_(user.role) !== "ADMIN") {
     throw apiError_("ROLE_FORBIDDEN", "Tindakan ini hanya dibenarkan untuk pentadbir.");
+  }
+  assertOwnerAdminIdentity_(user);
+}
+
+function ownerAdminEmail_() {
+  var email = lower_(PropertiesService.getScriptProperties().getProperty(OWNER_ADMIN_EMAIL_PROPERTY));
+  if (!email) {
+    throw apiError_("OWNER_ADMIN_NOT_CONFIGURED", "Jalankan setupDatabase() sebagai pemilik untuk menetapkan pentadbir tunggal.");
+  }
+  return email;
+}
+
+function assertOwnerAdminIdentity_(user) {
+  if (!user || text_(user._auth_type) !== "GOOGLE" || lower_(user.email) !== ownerAdminEmail_()) {
+    throw apiError_("ADMIN_ACCESS_DENIED", "Akses admin hanya dibenarkan kepada akaun Google pemilik sistem.");
   }
 }
 
@@ -1250,6 +1539,14 @@ function publicRow_(row) {
   var result = {};
   Object.keys(row).forEach(function (key) {
     if (key !== "_row") result[key] = row[key];
+  });
+  return result;
+}
+
+function mergeRecord_(base, changes) {
+  var result = {};
+  [base || {}, changes || {}].forEach(function (source) {
+    Object.keys(source).forEach(function (key) { result[key] = source[key]; });
   });
   return result;
 }

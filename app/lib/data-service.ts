@@ -19,6 +19,16 @@ export type UserProfile = {
   schoolZone: string;
 };
 
+export type SchoolCodeSession = {
+  sessionToken: string;
+  profile: UserProfile;
+};
+
+export type AppsScriptCredential = {
+  idToken?: string;
+  schoolSessionToken?: string;
+};
+
 export type SchoolRecord = {
   id: string;
   code: string;
@@ -29,6 +39,16 @@ export type SchoolRecord = {
   studentCount: number;
   achievement: number;
   submissionStatus: string;
+  accessCodeConfigured: boolean;
+  accessCodeLast4: string;
+  /** Kod rahsia ini hanya hadir sekali selepas sekolah dicipta atau kod ditukar. */
+  accessCode?: string;
+};
+
+export type RotatedSchoolAccess = {
+  schoolId: string;
+  accessCode: string;
+  accessCodeLast4: string;
 };
 
 export type InterventionRecord = {
@@ -58,6 +78,8 @@ export type DataService<T> = {
   saveSchool(payload: Record<string, unknown>): Promise<SchoolRecord>;
   deleteSchool(schoolId: string): Promise<void>;
   clearSchools(confirmation: string): Promise<void>;
+  rotateSchoolAccessCode(schoolId: string): Promise<RotatedSchoolAccess>;
+  clearAllData(confirmation: string): Promise<void>;
   saveAssessment(
     studentId: string,
     cycle: string,
@@ -90,7 +112,7 @@ function asRecord(value: unknown): JsonRecord {
     : {};
 }
 
-function normalizeUserProfile(value: unknown): UserProfile {
+export function normalizeUserProfile(value: unknown): UserProfile {
   const row = asRecord(value);
   const rawRole = String(row.role ?? "GURU").toUpperCase();
   return {
@@ -118,6 +140,9 @@ function normalizeSchool(value: unknown): SchoolRecord {
     studentCount: Number(row.student_count ?? row.studentCount ?? 0),
     achievement: Number(row.achievement_percent ?? row.achievement ?? 0),
     submissionStatus: String(row.submission_status ?? row.submissionStatus ?? "Belum mula"),
+    accessCodeConfigured: Boolean(row.access_code_configured ?? row.accessCodeConfigured),
+    accessCodeLast4: String(row.access_code_last4 ?? row.accessCodeLast4 ?? ""),
+    accessCode: String(row.access_code ?? row.accessCode ?? "") || undefined,
   };
 }
 
@@ -166,8 +191,8 @@ export function normalizeAppsScriptStudent(value: unknown): NormalizedAppsScript
     if (CYCLES.includes(cycle) && skill !== undefined) skills[cycle] = skill;
   });
 
-  // Isi cycle kosong dengan pencapaian terakhir supaya komponen analisis tidak menerima NaN.
-  let lastSkill = skills.TOV ?? 1;
+  // Nilai 0 bermaksud belum dinilai; jangan cipta pencapaian KP1 apabila Sheets kosong.
+  let lastSkill = skills.TOV ?? 0;
   CYCLES.forEach((cycle) => {
     if (skills[cycle] === undefined) skills[cycle] = lastSkill;
     lastSkill = skills[cycle];
@@ -235,6 +260,12 @@ export function createLocalDataService<T>(key: string): DataService<T> {
     async clearSchools() {
       throw new Error("Senarai sekolah tidak boleh dikosongkan dalam mod lokal.");
     },
+    async rotateSchoolAccessCode() {
+      throw new Error("Kod akses sekolah tidak boleh ditukar dalam mod lokal.");
+    },
+    async clearAllData() {
+      throw new Error("Data Google Sheets tidak boleh dikosongkan dalam mod lokal.");
+    },
     async saveAssessment() {},
     async saveIntervention() {},
     async submitCycle() {},
@@ -244,18 +275,25 @@ export function createLocalDataService<T>(key: string): DataService<T> {
 export function createAppsScriptDataService<T>(
   endpoint: string,
   normalizeStudent: (value: unknown) => T = (value) => value as T,
-  getIdToken: () => string = () => "",
+  getCredential: () => AppsScriptCredential = () => ({}),
 ): DataService<T> {
   const request = async (action: string, payload: JsonRecord = {}): Promise<unknown> => {
-    const idToken = getIdToken().trim();
-    if (!idToken) {
-      throw new Error("Sila log masuk dengan Google sebelum mengakses Google Sheets.");
+    const credential = getCredential();
+    const idToken = String(credential.idToken ?? "").trim();
+    const schoolSessionToken = String(credential.schoolSessionToken ?? "").trim();
+    if (!idToken && !schoolSessionToken) {
+      throw new Error("Sila log masuk sebelum mengakses Google Sheets.");
     }
     const requestId = globalThis.crypto.randomUUID();
     const response = await fetch(endpoint, {
       method: "POST",
       headers: { "Content-Type": "text/plain;charset=utf-8" },
-      body: JSON.stringify({ action, ...payload, request_id: requestId, idToken }),
+      body: JSON.stringify({
+        action,
+        ...payload,
+        request_id: requestId,
+        ...(idToken ? { idToken } : { schoolSessionToken }),
+      }),
     });
     const text = await response.text();
     let result: JsonRecord;
@@ -308,6 +346,19 @@ export function createAppsScriptDataService<T>(
     async clearSchools(confirmation) {
       await request("clearSchools", { confirmation });
     },
+    async rotateSchoolAccessCode(schoolId) {
+      const data = asRecord(await request("rotateSchoolAccessCode", { schoolId }));
+      const accessCode = String(data.access_code ?? data.accessCode ?? "").trim();
+      if (!accessCode) throw new Error("Pelayan tidak memulangkan kod akses baharu.");
+      return {
+        schoolId: String(data.school_id ?? data.schoolId ?? schoolId),
+        accessCode,
+        accessCodeLast4: String(data.access_code_last4 ?? data.accessCodeLast4 ?? accessCode.slice(-4)),
+      };
+    },
+    async clearAllData(confirmation) {
+      await request("clearAllData", { confirmation });
+    },
     async saveAssessment(studentId, cycle, skillCode, context) {
       await request("saveAssessment", { studentId, cycle, skillCode, ...context });
     },
@@ -317,5 +368,44 @@ export function createAppsScriptDataService<T>(
     async submitCycle(cycle, context) {
       await request("submitCycle", { cycle, ...context });
     },
+  };
+}
+
+/** Mewujudkan sesi guru terhad berdasarkan kod sekolah yang sah. */
+export async function loginWithSchoolCode(
+  endpoint: string,
+  schoolCode: string,
+): Promise<SchoolCodeSession> {
+  const code = schoolCode.trim().toUpperCase();
+  if (!code) throw new Error("Masukkan kod sekolah.");
+
+  const response = await fetch(endpoint, {
+    method: "POST",
+    headers: { "Content-Type": "text/plain;charset=utf-8" },
+    body: JSON.stringify({
+      action: "loginSchool",
+      schoolCode: code,
+      request_id: globalThis.crypto.randomUUID(),
+    }),
+  });
+  const text = await response.text();
+  let result: JsonRecord;
+  try {
+    result = asRecord(JSON.parse(text));
+  } catch {
+    throw new Error("Pelayan tidak memulangkan jawapan yang sah.");
+  }
+  if (!response.ok || result.ok !== true) {
+    const serverError = asRecord(result.error);
+    throw new Error(String(serverError.message ?? result.error ?? "Kod sekolah tidak sah."));
+  }
+
+  const data = asRecord(result.data);
+  const sessionToken = String(data.session_token ?? data.sessionToken ?? data.schoolSessionToken ?? "").trim();
+  if (!sessionToken) throw new Error("Pelayan tidak membekalkan sesi sekolah yang sah.");
+  const profile = normalizeUserProfile(data.profile);
+  return {
+    sessionToken,
+    profile: { ...profile, role: "GURU", email: "" },
   };
 }
