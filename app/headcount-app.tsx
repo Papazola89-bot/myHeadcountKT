@@ -32,6 +32,7 @@ type AuthStatus = "loading" | "signed-out" | "signed-in" | "error";
 type SheetStatus = "idle" | "connecting" | "connected" | "fallback";
 type GoogleCredentialResponse = { credential?: string };
 type AuthMethod = "google" | "school" | null;
+type SyncNotice = { tone:"success"|"error"; title:string; message:string } | null;
 
 declare global {
   interface Window {
@@ -101,6 +102,7 @@ export default function HeadcountApp(){
   const [mobile,setMobile]=useState(false),[toast,setToast]=useState(""),[saved,setSaved]=useState("Menunggu sambungan Google Sheets"),[undo,setUndo]=useState<Student[]|null>(null);
   const [submission,setSubmission]=useState<Record<string,string>>({});
   const [idToken,setIdToken]=useState(""),[schoolSessionToken,setSchoolSessionToken]=useState(""),[authMethod,setAuthMethod]=useState<AuthMethod>(null),[authPortal,setAuthPortal]=useState<Role>("guru"),[googleEmail,setGoogleEmail]=useState(""),[authStatus,setAuthStatus]=useState<AuthStatus>("loading"),[sheetStatus,setSheetStatus]=useState<SheetStatus>("idle"),[gisReady,setGisReady]=useState(false),[schoolLoginBusy,setSchoolLoginBusy]=useState(false);
+  const [syncNotice,setSyncNotice]=useState<SyncNotice>(null),[syncAttempt,setSyncAttempt]=useState(0);
   const [profile,setProfile]=useState<UserProfile|null>(null),[profileSaving,setProfileSaving]=useState(false);
   const [notificationsOpen,setNotificationsOpen]=useState(false),[notificationsRead,setNotificationsRead]=useState(false);
   const timer=useRef<ReturnType<typeof setTimeout>|null>(null),googleButton=useRef<HTMLDivElement|null>(null);
@@ -113,7 +115,7 @@ export default function HeadcountApp(){
       const token=response.credential||"",claims=validSessionToken(token);
       if(!active||!claims){setAuthStatus("error");announce("Token Google tidak sah atau telah tamat tempoh.");return}
       // ID token hanya berada dalam memori React dan hilang apabila halaman dimuat semula.
-      setSchoolSessionToken("");setAuthMethod("google");setIdToken(token);setGoogleEmail(claims.email);setProfile(null);setAuthStatus("signed-in");
+      setSchoolSessionToken("");setAuthMethod("google");setIdToken(token);setGoogleEmail(claims.email);setProfile(null);setSyncNotice(null);setSheetStatus("connecting");setAuthStatus("signed-in");
       announce(`Identiti Google disahkan. Akses admin sedang diperiksa.`);
     };
     const initialize=()=>{
@@ -149,7 +151,7 @@ export default function HeadcountApp(){
     const load=async()=>{
       if(authStatus==="loading")return;
       if(!appsScriptService){
-        if(active){setStudents([]);setSchools([]);setAdmins([]);setSchoolDirectory([]);setTransfers([]);setInterventions([]);setAdminInterventions([]);setSheetStatus("idle");setSaved("Log masuk untuk menyambung Google Sheets")}
+        if(active){setStudents([]);setSchools([]);setAdmins([]);setSchoolDirectory([]);setTransfers([]);setInterventions([]);setAdminInterventions([]);setSyncNotice(null);setSheetStatus("idle");setSaved("Log masuk untuk menyambung Google Sheets")}
         return;
       }
       setSheetStatus("connecting");setSaved("Menyambung ke Google Sheets...");
@@ -173,25 +175,29 @@ export default function HeadcountApp(){
           if(active){setInterventions(remoteInterventions.map(row=>({id:row.id,studentId:row.studentId,issue:row.issue,action:row.action,method:row.method,start:row.startDate,review:row.reviewDate,status:row.status})));setSchoolDirectory(remoteDirectory);setTransfers(remoteTransfers)}
         }
         if(active){setSchoolsLoading(false);setInterventionsLoading(false)}
-        setSheetStatus("connected");setSaved("Google Sheets disambungkan");
+        if(active){
+          const identity=safeProfile.schoolName||safeProfile.name||safeProfile.schoolCode||"akaun anda";
+          setSheetStatus("connected");setSaved("Google Sheets disambungkan");setSyncNotice({tone:"success",title:"Data berjaya diselaraskan",message:`Sambungan untuk ${identity} telah siap. Data terkini sudah dimuatkan dan portal selamat digunakan.`});
+        }
       }catch(error){
         if(!active)return;
         setStudents([]);setSchools([]);setAdmins([]);setSchoolDirectory([]);setTransfers([]);setInterventions([]);setAdminInterventions([]);setSchoolsLoading(false);setInterventionsLoading(false);
         setSheetStatus("fallback");setSaved("Google Sheets gagal disambungkan");
         const message=error instanceof Error?error.message:"Sambungan tidak berjaya.";
-        if(authMethod==="google"){setIdToken("");setGoogleEmail("");setAuthMethod(null);setProfile(null);setAuthStatus("signed-out")}
+        setSyncNotice({tone:"error",title:"Penyelarasan gagal",message:`Google Sheets belum dapat disambungkan. Tiada data kosong atau lama dipaparkan. ${message}`.trim()});
         announce(`Google Sheets tidak dapat dicapai. Tiada data tempatan dipaparkan. ${message}`.trim());
       }
     };
     void load();
     return()=>{active=false};
-  },[appsScriptService,authStatus,authMethod]);
-  const signOut=()=>{window.google?.accounts.id.disableAutoSelect();setIdToken("");setSchoolSessionToken("");setAuthMethod(null);setGoogleEmail("");setProfile(null);setStudents([]);setSchools([]);setAdmins([]);setSchoolDirectory([]);setTransfers([]);setInterventions([]);setAdminInterventions([]);setAuthStatus("signed-out");setSheetStatus("idle");setSaved("Log masuk untuk menyambung Sheets");setRole("guru");setView("dashboard");setSelected(null);setModal(null);setMobile(false);setNotificationsOpen(false);setNotificationsRead(false);announce("Anda telah log keluar daripada sesi myHeadcountKT.")};
+  },[appsScriptService,authStatus,authMethod,syncAttempt]);
+  const retrySync=()=>{setSyncNotice(null);setSheetStatus("connecting");setSaved("Menyambung semula ke Google Sheets...");setSyncAttempt(attempt=>attempt+1)};
+  const signOut=()=>{window.google?.accounts.id.disableAutoSelect();setIdToken("");setSchoolSessionToken("");setAuthMethod(null);setGoogleEmail("");setProfile(null);setStudents([]);setSchools([]);setAdmins([]);setSchoolDirectory([]);setTransfers([]);setInterventions([]);setAdminInterventions([]);setSyncNotice(null);setAuthStatus("signed-out");setSheetStatus("idle");setSaved("Log masuk untuk menyambung Sheets");setRole("guru");setView("dashboard");setSelected(null);setModal(null);setMobile(false);setNotificationsOpen(false);setNotificationsRead(false);announce("Anda telah log keluar daripada sesi myHeadcountKT.")};
   const loginSchool=async(code:string)=>{
     setSchoolLoginBusy(true);
     try{
       const session=await loginWithSchoolCode(appsScriptEndpoint,code);
-      setIdToken("");setGoogleEmail("");setSchoolSessionToken(session.sessionToken);setAuthMethod("school");setProfile({...session.profile,role:"GURU",email:""});setRole("guru");setView("dashboard");setAuthStatus("signed-in");announce(`Akses guru dibuka untuk ${session.profile.schoolName||session.profile.schoolCode}.`);
+      setIdToken("");setGoogleEmail("");setSchoolSessionToken(session.sessionToken);setAuthMethod("school");setProfile({...session.profile,role:"GURU",email:""});setRole("guru");setView("dashboard");setSyncNotice(null);setSheetStatus("connecting");setAuthStatus("signed-in");
     }catch(error){setAuthStatus("signed-out");announce(error instanceof Error?error.message:"Kod sekolah tidak sah.")}
     finally{setSchoolLoginBusy(false)}
   };
@@ -327,7 +333,11 @@ export default function HeadcountApp(){
   const schoolMeta=profile?.schoolCode?[profile.schoolCode,profile.schoolZone&&`Zon ${profile.schoolZone}`].filter(Boolean).join(" · "):(profile?.role==="ADMIN"?"Akses semua sekolah":"Semak tab PENGGUNA");
   const props={students:filtered,allStudents:students,cycle,setCycle,subject,setSubject,year,setYear,query,setQuery,go,setSelected,announce,exportCsv,userName};
   const sheetLabel=sheetStatus==="connected"?"Sheets disambungkan":sheetStatus==="connecting"?"Menyambung Sheets":sheetStatus==="fallback"?"Sheets gagal":"Sheets belum disambungkan";
-  if(authStatus!=="signed-in"||!profile)return <LoginScreen authStatus={authStatus==="signed-in"?"loading":authStatus} authPortal={authPortal} setAuthPortal={setAuthPortal} gisReady={gisReady} googleButton={googleButton} onSchoolLogin={loginSchool} schoolLoginBusy={schoolLoginBusy} toast={toast}/>;
+  if(authStatus!=="signed-in")return <LoginScreen authStatus={authStatus} authPortal={authPortal} setAuthPortal={setAuthPortal} gisReady={gisReady} googleButton={googleButton} onSchoolLogin={loginSchool} schoolLoginBusy={schoolLoginBusy} toast={toast}/>;
+  if(sheetStatus==="connecting"||sheetStatus==="idle")return <SyncLoadingScreen profile={profile} authMethod={authMethod}/>;
+  if(sheetStatus==="fallback")return <SyncResultScreen notice={syncNotice||{tone:"error",title:"Penyelarasan gagal",message:"Google Sheets belum dapat disambungkan. Tiada data dipaparkan sehingga sambungan berjaya."}} onRetry={retrySync} onLogout={signOut}/>;
+  if(syncNotice?.tone==="success")return <SyncResultScreen notice={syncNotice} onContinue={()=>setSyncNotice(null)} onLogout={signOut}/>;
+  if(!profile)return <SyncResultScreen notice={{tone:"error",title:"Profil tidak ditemui",message:"Profil pengguna tidak dapat dimuatkan. Cuba selaraskan semula atau log keluar."}} onRetry={retrySync} onLogout={signOut}/>;
   return <div className="app-shell">
     <aside className={`sidebar ${mobile?"open":""}`}>
       <div className="brand"><b><GraduationCap size={23}/></b><span><strong>myHeadcountKT</strong><small>Headcount & Intervensi</small></span><button onClick={()=>setMobile(false)}><X size={20}/></button></div>
@@ -356,6 +366,43 @@ export default function HeadcountApp(){
     {modal==="import"&&<ImportTransferModal records={transfers.filter(record=>record.status.toLowerCase()==="menunggu import"&&record.toSchoolId===profile.schoolId)} close={()=>setModal(null)} onImport={importTransfer}/>}
     {toast&&<div className="toast"><CheckCircle2 size={19}/>{toast}</div>}
   </div>
+}
+
+function SyncLoadingScreen({profile,authMethod}:{profile:UserProfile|null;authMethod:AuthMethod}){
+  const identity=profile?.schoolName||profile?.schoolCode||(authMethod==="google"?"akaun pentadbir":"sekolah anda");
+  return <main className="sync-page" aria-busy="true" aria-live="polite">
+    <section className="sync-card">
+      <div className="sync-brand"><b><GraduationCap size={25}/></b><span><strong>myHeadcountKT</strong><small>Headcount & Intervensi</small></span></div>
+      <div className="sync-spinner" aria-hidden="true"><FileSpreadsheet size={28}/><i/></div>
+      <span className="sync-eyebrow">SILA TUNGGU SEBENTAR</span>
+      <h1>Menyelaraskan data Google Sheets</h1>
+      <p>Sistem sedang mendapatkan data terkini untuk <strong>{identity}</strong>. Jangan tutup atau muat semula halaman ini.</p>
+      <ol className="sync-steps">
+        <li className="done"><Check size={15}/><span><strong>Identiti disahkan</strong><small>Akses pengguna telah diterima</small></span></li>
+        <li className="active"><i/><span><strong>Menyambung Google Sheets</strong><small>Memeriksa sambungan pangkalan data</small></span></li>
+        <li><i/><span><strong>Memuat data sekolah</strong><small>Portal dibuka selepas data siap</small></span></li>
+      </ol>
+      <small className="sync-footnote"><ShieldCheck size={14}/>Data belum boleh diubah sehingga penyelarasan selesai.</small>
+    </section>
+  </main>
+}
+
+function SyncResultScreen({notice,onRetry,onContinue,onLogout}:{notice:Exclude<SyncNotice,null>;onRetry?:()=>void;onContinue?:()=>void;onLogout:()=>void}){
+  const success=notice.tone==="success";
+  return <main className={`sync-page sync-result-page ${notice.tone}`} role="alertdialog" aria-modal="true" aria-labelledby="sync-result-title">
+    <section className="sync-card sync-result-card">
+      <div className="sync-brand"><b><GraduationCap size={25}/></b><span><strong>myHeadcountKT</strong><small>Headcount & Intervensi</small></span></div>
+      <i className="sync-result-icon">{success?<CheckCircle2 size={38}/>:<AlertCircle size={38}/>}</i>
+      <span className="sync-eyebrow">{success?"PENYELARASAN SELESAI":"SAMBUNGAN BELUM BERJAYA"}</span>
+      <h1 id="sync-result-title">{notice.title}</h1>
+      <p>{notice.message}</p>
+      <div className="sync-result-note"><ShieldCheck size={17}/><span><strong>{success?"Data terkini sedia digunakan":"Data anda dilindungi"}</strong><small>{success?"Anda kini boleh masuk dan mula merekod headcount.":"Portal dikunci supaya tiada rekod dibuat sebelum data sebenar tersedia."}</small></span></div>
+      <div className="sync-actions">
+        {success?<button className="primary" onClick={onContinue}>Masuk ke Portal <ArrowRight size={17}/></button>:<button className="primary" onClick={onRetry}><RotateCcw size={17}/>Cuba Semula</button>}
+        <button className="outline" onClick={onLogout}><LogOut size={16}/>Log keluar</button>
+      </div>
+    </section>
+  </main>
 }
 
 function LoginScreen({authStatus,authPortal,setAuthPortal,gisReady,googleButton,onSchoolLogin,schoolLoginBusy,toast}:{authStatus:AuthStatus;authPortal:Role;setAuthPortal:(role:Role)=>void;gisReady:boolean;googleButton:React.RefObject<HTMLDivElement|null>;onSchoolLogin:(code:string)=>Promise<void>;schoolLoginBusy:boolean;toast:string}){

@@ -92,6 +92,23 @@ test("school-code sessions are isolated from Google admin sessions", async () =>
   assert.match(serviceSource, /session_token/);
 });
 
+test("blocks the portal while Google Sheets syncs and shows explicit results", async () => {
+  const [appSource, stylesSource] = await Promise.all([
+    readFile(new URL("../app/headcount-app.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
+  ]);
+  assert.match(appSource, /function SyncLoadingScreen/);
+  assert.match(appSource, /function SyncResultScreen/);
+  assert.match(appSource, /sheetStatus==="connecting"\|\|sheetStatus==="idle"/);
+  assert.match(appSource, /Menyelaraskan data Google Sheets/);
+  assert.match(appSource, /Data berjaya diselaraskan/);
+  assert.match(appSource, /Cuba Semula/);
+  assert.match(appSource, /Masuk ke Portal/);
+  assert.match(appSource, /Tiada data kosong atau lama dipaparkan/);
+  assert.match(stylesSource, /\.sync-page/);
+  assert.match(stylesSource, /@keyframes sync-spin/);
+});
+
 test("three full-access admins and official school-code login are enforced", async () => {
   const [appSource, serviceSource, backendSource] = await Promise.all([
     readFile(new URL("../app/headcount-app.tsx", import.meta.url), "utf8"),
