@@ -104,6 +104,7 @@ export type DataService<T> = {
   getInterventions(): Promise<InterventionRecord[]>;
   saveStudents(students: T[]): Promise<void>;
   saveStudent(payload: Record<string, unknown>): Promise<T>;
+  saveStudentSubjects(payload: Record<string, unknown>): Promise<T[]>;
   saveSchool(payload: Record<string, unknown>): Promise<SchoolRecord>;
   deleteSchool(schoolId: string): Promise<void>;
   clearSchools(confirmation: string): Promise<void>;
@@ -114,6 +115,7 @@ export type DataService<T> = {
     skillCode: string,
     context: AssessmentContext,
   ): Promise<void>;
+  saveTargets(payload: Record<string, unknown>): Promise<void>;
   saveIntervention(payload: Record<string, unknown>): Promise<void>;
   submitCycle(cycle: string, context: SubmissionContext): Promise<void>;
 };
@@ -130,6 +132,7 @@ export type NormalizedAppsScriptStudent = {
   startDate: string;
   skills: Record<string, number>;
   intervention: "Tiada" | "Aktif" | "Selesai" | "Perlu susulan";
+  manualOti: boolean;
 };
 
 const CYCLES = ["TOV", "OTI 1", "AR 1", "OTI 2", "AR 2", "OTI 3", "AR 3", "ETR"];
@@ -260,12 +263,16 @@ export function normalizeAppsScriptStudent(value: unknown): NormalizedAppsScript
     if (CYCLES.includes(cycle) && skill !== undefined) skills[cycle] = skill;
   });
 
-  // Nilai 0 bermaksud belum dinilai; jangan cipta pencapaian KP1 apabila Sheets kosong.
-  let lastSkill = skills.TOV ?? 0;
-  CYCLES.forEach((cycle) => {
-    if (skills[cycle] === undefined) skills[cycle] = lastSkill;
-    lastSkill = skills[cycle];
+  // SASARAN ialah sumber rasmi OTI/ETR baharu. PENILAIAN lama kekal sebagai fallback.
+  const targets = asRecord(row.targets);
+  (["OTI 1","OTI 2","OTI 3","ETR"] as const).forEach((cycle,index) => {
+    const compact = cycle.replace(" ", "");
+    const target = skillNumber(targets[cycle] ?? targets[compact] ?? targets[compact.toLowerCase()] ?? targets[`OTI${index+1}`]);
+    if (target !== undefined) skills[cycle] = target;
   });
+
+  // Nilai 0 bermaksud belum dinilai. Jangan isi AR kosong daripada OTI sebelumnya.
+  CYCLES.forEach((cycle) => { if (skills[cycle] === undefined) skills[cycle] = 0; });
 
   const rawSubject = String(row.subject ?? row.subjek ?? "Bahasa Melayu").toLowerCase();
   const rawStatus = String(row.status ?? "Aktif").toLowerCase();
@@ -293,6 +300,7 @@ export function normalizeAppsScriptStudent(value: unknown): NormalizedAppsScript
     startDate,
     skills,
     intervention,
+    manualOti: String(targets.manual_override ?? targets.manualOverride ?? "").toLowerCase()==="true",
   };
 }
 
@@ -340,6 +348,10 @@ export function createLocalDataService<T>(key: string): DataService<T> {
     async saveStudent(payload) {
       return payload as T;
     },
+    async saveStudentSubjects(payload) {
+      const subjects=Array.isArray(payload.subjects)?payload.subjects:[payload.subject];
+      return subjects.map(subject=>({...payload,subject}) as T);
+    },
     async saveSchool() {
       throw new Error("Sekolah tidak boleh disimpan dalam mod lokal.");
     },
@@ -353,6 +365,7 @@ export function createLocalDataService<T>(key: string): DataService<T> {
       throw new Error("Data Google Sheets tidak boleh dikosongkan dalam mod lokal.");
     },
     async saveAssessment() {},
+    async saveTargets() {},
     async saveIntervention() {},
     async submitCycle() {},
   };
@@ -449,6 +462,11 @@ export function createAppsScriptDataService<T>(
       const data = asRecord(await request("saveStudent", payload));
       return normalizeStudent(data.student);
     },
+    async saveStudentSubjects(payload) {
+      const data=asRecord(await request("saveStudent", payload));
+      const students=Array.isArray(data.students)?data.students: data.student?[data.student]:[];
+      return students.map(normalizeStudent);
+    },
     async saveSchool(payload) {
       return normalizeSchool(await request("saveSchool", payload));
     },
@@ -463,6 +481,9 @@ export function createAppsScriptDataService<T>(
     },
     async saveAssessment(studentId, cycle, skillCode, context) {
       await request("saveAssessment", { studentId, cycle, skillCode, ...context });
+    },
+    async saveTargets(payload) {
+      await request("saveTargets", payload);
     },
     async saveIntervention(payload) {
       await request("saveIntervention", payload);

@@ -3,6 +3,14 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 import ts from "typescript";
 
+async function importTypeScript(relativePath) {
+  const source = await readFile(new URL(relativePath, import.meta.url), "utf8");
+  const output = ts.transpileModule(source, {
+    compilerOptions: { module: ts.ModuleKind.ES2022, target: ts.ScriptTarget.ES2022 },
+  }).outputText;
+  return import(`data:text/javascript;base64,${Buffer.from(output).toString("base64")}#${Date.now()}`);
+}
+
 async function render() {
   const workerUrl = new URL("../dist/server/index.js", import.meta.url);
   workerUrl.searchParams.set("test", `${process.pid}-${Date.now()}`);
@@ -168,6 +176,56 @@ test("student intake offers Year 2 through Year 6 only", async () => {
   assert.doesNotMatch(appSource, /<option value="1">Tahun 1<\/option>/);
   assert.doesNotMatch(appSource, /saveStudent\(\{studentId:student\.id/);
   assert.match(backendSource, /student_id: existing \? existing\.student_id : "ST-" \+ Utilities\.getUuid\(\)/);
+});
+
+test("generates fixed OTI targets from TOV and ETR and reports AR progress", async () => {
+  const { generateOtiTargets, validateManualTargets, arProgress } = await importTypeScript("../app/lib/headcount.ts");
+  assert.deepEqual(generateOtiTargets(4, 16), { oti1: 7, oti2: 10, oti3: 13 });
+  assert.deepEqual(generateOtiTargets(20, 32), { oti1: 23, oti2: 26, oti3: 29 });
+  assert.deepEqual(generateOtiTargets(8, 8), { oti1: 8, oti2: 8, oti3: 8 });
+  assert.throws(() => generateOtiTargets(12, 8), /ETR hendaklah sama atau lebih tinggi/);
+  for (let tov = 1; tov <= 28; tov += 1) {
+    const targets = generateOtiTargets(tov, tov + 4);
+    assert.ok(tov < targets.oti1 && targets.oti1 < targets.oti2 && targets.oti2 < targets.oti3 && targets.oti3 <= tov + 4);
+  }
+  assert.equal(validateManualTargets(4, { oti1: 7, oti2: 6, oti3: 13 }, 16), "Pastikan TOV ≤ OTI 1 ≤ OTI 2 ≤ OTI 3 ≤ ETR.");
+  assert.deepEqual(arProgress(6, 7, 16), { status: "BELUM MENCAPAI SASARAN", tone: "amber", comparison: "Kurang 1 KP daripada sasaran", remainder: "Baki ke ETR: 10 KP" });
+  assert.equal(arProgress(17, 13, 16).status, "MELEBIHI ETR");
+  assert.equal(arProgress(6, 0, 0).status, "SASARAN BELUM DITETAPKAN");
+});
+
+test("reads SASARAN without inventing missing AR values", async () => {
+  const { normalizeAppsScriptStudent } = await importTypeScript("../app/lib/data-service.ts");
+  const student = normalizeAppsScriptStudent({
+    student_id: "ST-1", nama: "Murid Ujian", tahun: 4, kelas: "4 Cekal", subject: "Bahasa Melayu", status: "Aktif",
+    assessments: [{ cycle: "TOV", skill_code: "KP4" }, { cycle: "AR 1", skill_code: "KP6" }],
+    targets: { OTI1: "KP7", OTI2: "KP10", OTI3: "KP13", ETR: "KP16", manual_override: true },
+  });
+  assert.equal(student.skills.TOV, 4);
+  assert.equal(student.skills["OTI 2"], 10);
+  assert.equal(student.skills["AR 1"], 6);
+  assert.equal(student.skills["AR 2"], 0);
+  assert.equal(student.manualOti, true);
+});
+
+test("supports atomic BM and Mathematics intake plus persistent targets", async () => {
+  const [appSource, serviceSource, backendSource] = await Promise.all([
+    readFile(new URL("../app/headcount-app.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/lib/data-service.ts", import.meta.url), "utf8"),
+    readFile(new URL("../google-apps-script/Code.gs", import.meta.url), "utf8"),
+  ]);
+  assert.match(appSource, /Bahasa Melayu &amp; Matematik/);
+  assert.match(appSource, /subject==="Bahasa Melayu & Matematik"\?\["Bahasa Melayu","Matematik"\]/);
+  assert.match(appSource, /Tetapkan OTI secara manual/);
+  assert.match(appSource, /Perubahan AR tidak akan mengubah sasaran asal/);
+  assert.match(serviceSource, /request\("saveTargets"/);
+  assert.match(serviceSource, /request\("saveStudent", payload\)/);
+  assert.match(backendSource, /saveTargets: saveTargets_/);
+  assert.match(backendSource, /function calculateOtiTargets_/);
+  assert.match(backendSource, /students: savedStudents/);
+  assert.doesNotThrow(() => new Function(backendSource));
+  const backendTargets = new Function(`${backendSource}; return calculateOtiTargets_;`)();
+  assert.deepEqual(backendTargets(4, 16), [7, 10, 13]);
 });
 
 test("student transfers preserve history, support school import, and retain Apungan", async () => {

@@ -20,7 +20,8 @@ Jika backend belum tersedia, aplikasi tidak memaparkan data contoh atau mengangg
 - Portal Guru melalui kod rasmi sekolah sendiri dan Portal Admin melalui sehingga 3 akaun Google pentadbir.
 - Setiap sekolah mendaftarkan muridnya sendiri; semua headcount dibina daripada rekod murid tersebut dan digabungkan dalam paparan admin.
 - Dashboard, filter, graf, murid perlu tindakan dan profil individu.
-- Headcount TOV, OTI, AR dan ETR dengan autosave serta undo.
+- Headcount TOV, OTI, AR dan ETR dengan OTI automatik berdasarkan TOV→ETR, perbandingan sasaran, autosave serta undo.
+- Pendaftaran murid sekali untuk Bahasa Melayu, Matematik atau kedua-dua mata pelajaran.
 - Intervensi, tarikh semakan dan penghantaran yang disimpan ke Google Sheets.
 - Analisis sekolah/daerah, heatmap, laporan, CSV, cetakan dan audit.
 - Ketiga-tiga admin mempunyai akses penuh yang sama untuk mengurus sekolah, murid, headcount, intervensi, laporan dan tetapan.
@@ -57,7 +58,7 @@ Fail `google-apps-script/Code.gs` menyediakan:
 6. Log masuk sebagai pentadbir pertama, buka **Pengguna → Tambah Admin**, kemudian masukkan nama dan e-mel Google dua pegawai lain. Ketiga-tiganya menerima akses penuh.
 7. Tambah sekolah melalui portal Admin menggunakan kod rasmi sekolah. Guru menggunakan kod yang sama untuk log masuk; tiada proses jana kod guru.
 8. Pilih **Deploy → Manage deployments → Edit → New version → Deploy**. Gunakan **Execute as: Me** kerana identiti dan skop masih disahkan oleh backend.
-9. Buka URL `/exec?action=health`. Respons sepatutnya JSON dengan `"status":"ok"` dan versi `1.4.0`.
+9. Buka URL `/exec?action=health`. Respons sepatutnya JSON dengan `"status":"ok"` dan versi `1.5.0`.
 
 OAuth Web Client menggunakan Client ID `491720020946-9f6ifkrt5nrrpu4a7dsqeunv9iu0ell6.apps.googleusercontent.com`. Pastikan `https://sihadir-headcount.geek2606.chatgpt.site`, `https://myheadcountkt.vercel.app` dan `http://localhost:3000` telah didaftarkan sebagai **Authorized JavaScript origins**. Client Secret tidak diperlukan oleh frontend dan tidak boleh dimasukkan ke repositori.
 

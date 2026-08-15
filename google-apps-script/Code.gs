@@ -15,7 +15,7 @@
  */
 
 var API_NAME = "myHeadcountKT";
-var API_VERSION = "1.4.0";
+var API_VERSION = "1.5.0";
 var DATABASE_ID_PROPERTY = "DATABASE_SPREADSHEET_ID";
 var OWNER_ADMIN_EMAIL_PROPERTY = "OWNER_ADMIN_EMAIL";
 var SCHOOL_SESSION_EPOCH_PROPERTY = "SCHOOL_SESSION_EPOCH";
@@ -38,7 +38,7 @@ var TABLES = {
   PENGGUNA: ["user_id", "google_sub", "email", "nama", "role", "school_id", "status"],
   MURID: ["student_id", "school_id", "nama", "tahun", "kelas", "tarikh_mula", "subject", "status"],
   PENILAIAN: ["assessment_id", "student_id", "subject", "tahun_data", "cycle", "skill_code", "tarikh", "teacher_id", "timestamp"],
-  SASARAN: ["student_id", "OTI1", "OTI2", "OTI3", "ETR"],
+  SASARAN: ["student_id", "OTI1", "OTI2", "OTI3", "ETR", "manual_override", "updated_at"],
   INTERVENSI: ["intervention_id", "student_id", "skill_code", "isu", "intervensi", "kaedah", "tarikh_mula", "tarikh_semakan", "evidens", "outcome", "status", "teacher_id"],
   SUBMISSION: ["school_id", "tahun", "subject", "cycle", "status", "submitted_at", "verified_at", "verified_by"],
   PERPINDAHAN: [
@@ -148,6 +148,7 @@ function doPost(e) {
       clearAllData: clearAllData_,
       getInterventions: getInterventions_,
       saveAssessment: saveAssessment_,
+      saveTargets: saveTargets_,
       saveIntervention: saveIntervention_,
       submitCycle: submitCycle_
     };
@@ -757,51 +758,146 @@ function saveStudent_(input, user) {
   var name = requiredText_(input.name || input.nama, "name", 300);
   var year = normalizeStudentYear_(input.tahun || input.year);
   var className = requiredText_(input.className || input.kelas, "className", 100);
-  var subject = normalizeSubject_(input.subject);
+  var requestedSubjects = Array.isArray(input.subjects) && input.subjects.length
+    ? input.subjects
+    : [input.subject];
+  var subjects = [];
+  requestedSubjects.forEach(function (value) {
+    var normalized = normalizeSubject_(value);
+    if (subjects.indexOf(normalized) === -1) subjects.push(normalized);
+  });
+  if (subjects.length > 1 && studentId) {
+    throw apiError_("VALIDATION_ERROR", "Kemas kini murid sedia ada hanya dibenarkan untuk satu mata pelajaran.");
+  }
   var startDateInput = input.startDate || input.tarikh_mula;
   var status = normalizeStudentStatus_(input.status || "Aktif");
 
   return withWriteLock_(function () {
     var existing = studentId ? ownedStudent_(studentId, user) : null;
 
-    var duplicate = findRow_("MURID", function (row) {
-      return same_(row.school_id, schoolId) &&
-        lower_(row.nama) === lower_(name) &&
-        same_(row.tahun, year) &&
-        lower_(row.kelas) === lower_(className) &&
-        same_(row.subject, subject) &&
-        (!existing || !same_(row.student_id, existing.student_id));
+    var savedStudents = subjects.map(function (subject) {
+      var duplicate = findRow_("MURID", function (row) {
+        return same_(row.school_id, schoolId) &&
+          lower_(row.nama) === lower_(name) &&
+          same_(row.tahun, year) &&
+          lower_(row.kelas) === lower_(className) &&
+          same_(row.subject, subject) &&
+          (!existing || !same_(row.student_id, existing.student_id));
+      });
+      if (duplicate && subjects.length === 1) {
+        throw apiError_(
+          "DUPLICATE_STUDENT",
+          "Murid dengan nama, tahun, kelas dan mata pelajaran yang sama sudah wujud di sekolah ini."
+        );
+      }
+      if (duplicate) return publicRow_(duplicate);
+
+      var record = {
+        student_id: existing ? existing.student_id : "ST-" + Utilities.getUuid(),
+        school_id: schoolId,
+        nama: name,
+        tahun: year,
+        kelas: className,
+        tarikh_mula: startDateInput
+          ? requiredDate_(startDateInput, "startDate")
+          : (existing && existing.tarikh_mula ? existing.tarikh_mula : new Date()),
+        subject: subject,
+        status: status
+      };
+      if (existing) updateRecord_("MURID", existing._row, record);
+      else appendRecord_("MURID", record);
+      audit_(user, "SAVE_STUDENT", existing || null, record);
+      return publicRow_(record);
     });
-    if (duplicate) {
-      throw apiError_(
-        "DUPLICATE_STUDENT",
-        "Murid dengan nama, tahun, kelas dan mata pelajaran yang sama sudah wujud di sekolah ini."
-      );
-    }
-
-    var record = {
-      student_id: existing ? existing.student_id : "ST-" + Utilities.getUuid(),
-      school_id: schoolId,
-      nama: name,
-      tahun: year,
-      kelas: className,
-      tarikh_mula: startDateInput
-        ? requiredDate_(startDateInput, "startDate")
-        : (existing && existing.tarikh_mula ? existing.tarikh_mula : new Date()),
-      subject: subject,
-      status: status
-    };
-
-    if (existing) updateRecord_("MURID", existing._row, record);
-    else appendRecord_("MURID", record);
-
-    audit_(user, "SAVE_STUDENT", existing || null, record);
     return {
       saved: true,
       updated: Boolean(existing),
-      student: publicRow_(record)
+      student: savedStudents[0],
+      students: savedStudents
     };
   });
+}
+
+/** Simpan sasaran OTI/ETR secara atomik. AR tidak pernah mengubah sasaran ini. */
+function saveTargets_(input, user) {
+  var studentId = requiredText_(input.studentId || input.student_id, "studentId", 100);
+  var student = ownedStudent_(studentId, user);
+  var subject = normalizeSubject_(input.subject || student.subject);
+  var year = normalizeYear_(input.tahun_data || input.year || new Date().getFullYear());
+  var tovCode = normalizeSkill_(input.TOV || input.tov);
+  var etrCode = normalizeSkill_(input.ETR || input.etr);
+  var tov = normalizeSkillNumber_(tovCode);
+  var etr = normalizeSkillNumber_(etrCode);
+  var manualOverride = Boolean(input.manualOverride || input.manual_override);
+  if (!tov || !etr) throw apiError_("INVALID_SKILL", "TOV dan ETR mesti antara KP1 hingga KP32.");
+  if (etr < tov) throw apiError_("INVALID_TARGET", "ETR hendaklah sama atau lebih tinggi daripada TOV.");
+  if (student.subject && !same_(student.subject, subject)) {
+    throw apiError_("SUBJECT_MISMATCH", "Mata pelajaran tidak sepadan dengan rekod murid.");
+  }
+
+  var targets = manualOverride
+    ? [input.OTI1 || input.oti1, input.OTI2 || input.oti2, input.OTI3 || input.oti3].map(function (value) {
+        var code = normalizeSkill_(value);
+        var number = normalizeSkillNumber_(code);
+        if (!number) throw apiError_("INVALID_SKILL", "Nilai OTI mesti antara KP1 hingga KP32.");
+        return number;
+      })
+    : calculateOtiTargets_(tov, etr);
+  if (!(tov <= targets[0] && targets[0] <= targets[1] && targets[1] <= targets[2] && targets[2] <= etr)) {
+    throw apiError_("INVALID_TARGET_ORDER", "Pastikan TOV <= OTI1 <= OTI2 <= OTI3 <= ETR.");
+  }
+  [tov].concat(targets).concat([etr]).forEach(function (number) { assertSkill_("KP" + number, subject); });
+  ["TOV", "OTI 1", "OTI 2", "OTI 3", "ETR"].forEach(function (cycle) {
+    assertCycleOpen_(student.school_id, year, subject, cycle);
+  });
+
+  return withWriteLock_(function () {
+    var now = new Date();
+    function upsertAssessment(cycle, skillCode) {
+      var existingAssessment = findRow_("PENILAIAN", function (row) {
+        return same_(row.student_id, studentId) && same_(row.subject, subject) &&
+          same_(row.tahun_data, year) && same_(row.cycle, cycle);
+      });
+      var assessment = {
+        assessment_id: existingAssessment ? existingAssessment.assessment_id : Utilities.getUuid(),
+        student_id: studentId, subject: subject, tahun_data: year, cycle: cycle,
+        skill_code: skillCode, tarikh: now, teacher_id: user.user_id, timestamp: now
+      };
+      if (existingAssessment) updateRecord_("PENILAIAN", existingAssessment._row, assessment);
+      else appendRecord_("PENILAIAN", assessment);
+    }
+    upsertAssessment("TOV", "KP" + tov);
+    upsertAssessment("ETR", "KP" + etr);
+    var existingTarget = findRow_("SASARAN", function (row) { return same_(row.student_id, studentId); });
+    var targetRecord = {
+      student_id: studentId,
+      OTI1: "KP" + targets[0], OTI2: "KP" + targets[1], OTI3: "KP" + targets[2], ETR: "KP" + etr,
+      manual_override: manualOverride, updated_at: now
+    };
+    if (existingTarget) updateRecord_("SASARAN", existingTarget._row, targetRecord);
+    else appendRecord_("SASARAN", targetRecord);
+    audit_(user, "SAVE_TARGETS", existingTarget || null, targetRecord);
+    return {saved:true,student_id:studentId,subject:subject,tahun_data:year,TOV:"KP"+tov,OTI1:targetRecord.OTI1,OTI2:targetRecord.OTI2,OTI3:targetRecord.OTI3,ETR:targetRecord.ETR,manual_override:manualOverride};
+  });
+}
+
+function calculateOtiTargets_(tov, etr) {
+  if (etr < tov) throw apiError_("INVALID_TARGET", "ETR hendaklah sama atau lebih tinggi daripada TOV.");
+  if (etr === tov) return [tov, tov, tov];
+  var distance = etr - tov;
+  var values = [0.25, 0.5, 0.75].map(function (portion) { return Math.round(tov + distance * portion); });
+  if (distance < 4) {
+    values[0] = Math.max(tov, Math.min(etr, values[0]));
+    values[1] = Math.max(values[0], Math.min(etr, values[1]));
+    values[2] = Math.max(values[1], Math.min(etr, values[2]));
+    return values;
+  }
+  for (var i = 0; i < values.length; i += 1) {
+    var minimum = i === 0 ? tov + 1 : values[i - 1] + 1;
+    var maximum = etr - (2 - i);
+    values[i] = Math.max(minimum, Math.min(maximum, values[i]));
+  }
+  return values;
 }
 
 function saveAssessment_(input, user) {
