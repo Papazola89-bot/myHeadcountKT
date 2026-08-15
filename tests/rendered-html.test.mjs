@@ -22,8 +22,9 @@ test("renders the myHeadcountKT product shell", async () => {
   assert.match(html, /myHeadcountKT/);
   assert.match(html, /Headcount &amp; Intervensi/);
   assert.match(html, /Log masuk ke myHeadcountKT/);
-  assert.match(html, /Data tidak dipaparkan sebelum akses disahkan/);
-  assert.match(html, /Kod akses rahsia sekolah/);
+  assert.match(html, /Data sekolah lain tidak boleh dicapai/);
+  assert.match(html, /Kod sekolah/);
+  assert.match(html, /Contoh: JBA3012/);
   assert.match(html, /Masuk sebagai Guru/);
   assert.match(html, /\/logos\/ppd-kota-tinggi\.png/);
   assert.match(html, /\/logos\/spb-ppdkt\.png/);
@@ -91,18 +92,18 @@ test("school-code sessions are isolated from Google admin sessions", async () =>
   assert.match(serviceSource, /session_token/);
 });
 
-test("three full-access admins and safe operational reset are enforced", async () => {
+test("three full-access admins and official school-code login are enforced", async () => {
   const [appSource, serviceSource, backendSource] = await Promise.all([
     readFile(new URL("../app/headcount-app.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/lib/data-service.ts", import.meta.url), "utf8"),
     readFile(new URL("../google-apps-script/Code.gs", import.meta.url), "utf8"),
   ]);
   assert.match(appSource, /KOSONGKAN SEMUA DATA/);
-  assert.match(appSource, /Kod akses rahsia sekolah/);
-  assert.match(appSource, /rotateSchoolCode/);
+  assert.match(appSource, /kod rasmi sekolah sendiri/i);
+  assert.doesNotMatch(appSource, /rotateSchoolCode|rotateTeacherAccessCode|Tambah Guru/);
   assert.doesNotMatch(appSource, /Guru Contoh|Farah Nabila|Mohd Azlan|Siti Rafidah/);
   assert.doesNotMatch(appSource, /KP12\.4|\+7\.3 KP|Laporan Headcount AR 2/);
-  assert.match(serviceSource, /request\("rotateSchoolAccessCode"/);
+  assert.doesNotMatch(serviceSource, /rotateSchoolAccessCode|rotateTeacherAccessCode|loginTeacher/);
   assert.match(serviceSource, /request\("clearAllData"/);
   assert.match(appSource, /function AdminModal/);
   assert.match(appSource, /Tambah Admin/);
@@ -116,6 +117,8 @@ test("three full-access admins and safe operational reset are enforced", async (
   assert.doesNotMatch(backendSource, /assertOwnerAdminIdentity_/);
   assert.match(backendSource, /KOSONGKAN SEMUA DATA/);
   assert.match(backendSource, /preserved: \["SEKOLAH", "MASTER_KEMAHIRAN", "ADMIN_ACCOUNTS"\]/);
+  assert.match(backendSource, /same_\(candidate\.kod_sekolah, accessCode\)/);
+  assert.doesNotMatch(backendSource, /loginTeacher:|saveTeacher:|rotateTeacherAccessCode:/);
 });
 
 test("school administration uses Google Sheets rather than hardcoded demo rows", async () => {
@@ -138,11 +141,34 @@ test("school administration uses Google Sheets rather than hardcoded demo rows",
 });
 
 test("student intake offers Year 2 through Year 6 only", async () => {
-  const appSource = await readFile(new URL("../app/headcount-app.tsx", import.meta.url), "utf8");
+  const [appSource, backendSource] = await Promise.all([
+    readFile(new URL("../app/headcount-app.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../google-apps-script/Code.gs", import.meta.url), "utf8"),
+  ]);
   assert.match(appSource, /const STUDENT_YEARS=\[2,3,4,5,6\] as const/);
   assert.match(appSource, /\[year,setYear\]=useState\(2\)/);
   assert.match(appSource, /Pemulihan Khas Tahun 2 hingga Tahun 6/);
   assert.doesNotMatch(appSource, /<option value="1">Tahun 1<\/option>/);
+  assert.doesNotMatch(appSource, /saveStudent\(\{studentId:student\.id/);
+  assert.match(backendSource, /student_id: existing \? existing\.student_id : "ST-" \+ Utilities\.getUuid\(\)/);
+});
+
+test("student transfers preserve history, support school import, and retain Apungan", async () => {
+  const [appSource, serviceSource, backendSource] = await Promise.all([
+    readFile(new URL("../app/headcount-app.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/lib/data-service.ts", import.meta.url), "utf8"),
+    readFile(new URL("../google-apps-script/Code.gs", import.meta.url), "utf8"),
+  ]);
+  assert.match(appSource, /Pindahkan Murid/);
+  assert.match(appSource, /Import Murid/);
+  assert.match(appSource, /Perpindahan & Apungan/);
+  assert.match(serviceSource, /request\("transferStudent"/);
+  assert.match(serviceSource, /request\("importTransferredStudent"/);
+  assert.match(backendSource, /PERPINDAHAN/);
+  assert.match(backendSource, /Menunggu Import/);
+  assert.match(backendSource, /Apungan/);
+  assert.match(backendSource, /IMPORT_TRANSFERRED_STUDENT/);
+  assert.match(backendSource, /same_\(row\.from_school_id, user\.school_id\) \|\| same_\(row\.to_school_id, user\.school_id\)/);
 });
 
 test("intervention dashboards use Google Sheets and contain no seeded admin totals", async () => {

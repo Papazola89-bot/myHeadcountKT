@@ -37,6 +37,27 @@ export type AppsScriptCredential = {
   schoolSessionToken?: string;
 };
 
+export type SchoolDirectoryRecord = {
+  id: string;
+  code: string;
+  name: string;
+  zone: string;
+};
+
+export type TransferRecord = {
+  id: string;
+  studentId: string;
+  studentName: string;
+  fromSchoolId: string;
+  fromSchoolName: string;
+  toSchoolId: string;
+  toSchoolName: string;
+  type: "DALAM_DAERAH" | "LUAR_DAERAH";
+  status: string;
+  requestedAt: string;
+  importedAt: string;
+};
+
 export type SchoolRecord = {
   id: string;
   code: string;
@@ -51,12 +72,6 @@ export type SchoolRecord = {
   accessCodeLast4: string;
   /** Kod rahsia ini hanya hadir sekali selepas sekolah dicipta atau kod ditukar. */
   accessCode?: string;
-};
-
-export type RotatedSchoolAccess = {
-  schoolId: string;
-  accessCode: string;
-  accessCodeLast4: string;
 };
 
 export type InterventionRecord = {
@@ -80,15 +95,18 @@ export type DataService<T> = {
   saveProfile(name: string): Promise<UserProfile>;
   getAdmins(): Promise<AdminRecord[]>;
   saveAdmin(payload: { email: string; name: string }): Promise<AdminRecord>;
+  getSchoolDirectory(): Promise<SchoolDirectoryRecord[]>;
+  getTransfers(): Promise<TransferRecord[]>;
+  transferStudent(studentId: string, transferType: TransferRecord["type"], toSchoolId?: string): Promise<void>;
+  importTransferredStudent(transferId: string): Promise<T>;
   getStudents(): Promise<T[]>;
   getSchools(): Promise<SchoolRecord[]>;
   getInterventions(): Promise<InterventionRecord[]>;
   saveStudents(students: T[]): Promise<void>;
-  saveStudent(payload: Record<string, unknown>): Promise<void>;
+  saveStudent(payload: Record<string, unknown>): Promise<T>;
   saveSchool(payload: Record<string, unknown>): Promise<SchoolRecord>;
   deleteSchool(schoolId: string): Promise<void>;
   clearSchools(confirmation: string): Promise<void>;
-  rotateSchoolAccessCode(schoolId: string): Promise<RotatedSchoolAccess>;
   clearAllData(confirmation: string): Promise<void>;
   saveAssessment(
     studentId: string,
@@ -146,6 +164,35 @@ function normalizeAdmin(value: unknown): AdminRecord {
     name: String(row.nama ?? row.name ?? row.email ?? "Pentadbir"),
     status: rawStatus === "aktif" ? "Aktif" : "Tidak Aktif",
     isCurrent: Boolean(row.is_current ?? row.isCurrent),
+  };
+}
+
+function normalizeSchoolDirectory(value: unknown): SchoolDirectoryRecord {
+  const row = asRecord(value);
+  return {
+    id: String(row.school_id ?? row.schoolId ?? row.id ?? ""),
+    code: String(row.school_code ?? row.kod_sekolah ?? row.code ?? ""),
+    name: String(row.school_name ?? row.nama_sekolah ?? row.name ?? "Tanpa nama"),
+    zone: String(row.zone ?? row.zon ?? ""),
+  };
+}
+
+function normalizeTransfer(value: unknown): TransferRecord {
+  const row = asRecord(value);
+  return {
+    id: String(row.transfer_id ?? row.transferId ?? row.id ?? ""),
+    studentId: String(row.student_id ?? row.studentId ?? ""),
+    studentName: String(row.student_name ?? row.studentName ?? "Tanpa nama"),
+    fromSchoolId: String(row.from_school_id ?? row.fromSchoolId ?? ""),
+    fromSchoolName: String(row.from_school_name ?? row.fromSchoolName ?? ""),
+    toSchoolId: String(row.to_school_id ?? row.toSchoolId ?? ""),
+    toSchoolName: String(row.to_school_name ?? row.toSchoolName ?? ""),
+    type: String(row.transfer_type ?? row.transferType ?? "LUAR_DAERAH").toUpperCase() === "DALAM_DAERAH"
+      ? "DALAM_DAERAH"
+      : "LUAR_DAERAH",
+    status: String(row.status ?? ""),
+    requestedAt: String(row.requested_at ?? row.requestedAt ?? ""),
+    importedAt: String(row.imported_at ?? row.importedAt ?? ""),
   };
 }
 
@@ -264,6 +311,18 @@ export function createLocalDataService<T>(key: string): DataService<T> {
     async saveAdmin() {
       throw new Error("Pentadbir tidak boleh ditambah dalam mod lokal.");
     },
+    async getSchoolDirectory() {
+      return [];
+    },
+    async getTransfers() {
+      return [];
+    },
+    async transferStudent() {
+      throw new Error("Murid tidak boleh dipindahkan dalam mod lokal.");
+    },
+    async importTransferredStudent() {
+      throw new Error("Murid tidak boleh diimport dalam mod lokal.");
+    },
     async getStudents() {
       if (typeof window === "undefined") return [];
       const raw = window.localStorage.getItem(key);
@@ -278,7 +337,9 @@ export function createLocalDataService<T>(key: string): DataService<T> {
     async saveStudents(students) {
       window.localStorage.setItem(key, JSON.stringify(students));
     },
-    async saveStudent() {},
+    async saveStudent(payload) {
+      return payload as T;
+    },
     async saveSchool() {
       throw new Error("Sekolah tidak boleh disimpan dalam mod lokal.");
     },
@@ -287,9 +348,6 @@ export function createLocalDataService<T>(key: string): DataService<T> {
     },
     async clearSchools() {
       throw new Error("Senarai sekolah tidak boleh dikosongkan dalam mod lokal.");
-    },
-    async rotateSchoolAccessCode() {
-      throw new Error("Kod akses sekolah tidak boleh ditukar dalam mod lokal.");
     },
     async clearAllData() {
       throw new Error("Data Google Sheets tidak boleh dikosongkan dalam mod lokal.");
@@ -353,6 +411,23 @@ export function createAppsScriptDataService<T>(
     async saveAdmin(payload) {
       return normalizeAdmin(await request("saveAdmin", payload));
     },
+    async getSchoolDirectory() {
+      const data = await request("getSchoolDirectory");
+      if (!Array.isArray(data)) throw new Error("Direktori sekolah tidak sah.");
+      return data.map(normalizeSchoolDirectory);
+    },
+    async getTransfers() {
+      const data = await request("getTransfers");
+      if (!Array.isArray(data)) throw new Error("Senarai perpindahan tidak sah.");
+      return data.map(normalizeTransfer);
+    },
+    async transferStudent(studentId, transferType, toSchoolId) {
+      await request("transferStudent", { studentId, transferType, ...(toSchoolId ? { toSchoolId } : {}) });
+    },
+    async importTransferredStudent(transferId) {
+      const data = asRecord(await request("importTransferredStudent", { transferId }));
+      return normalizeStudent(data.student);
+    },
     async getStudents() {
       const data = await request("getStudents");
       if (!Array.isArray(data)) throw new Error("Senarai murid daripada Google Sheets tidak sah.");
@@ -371,7 +446,8 @@ export function createAppsScriptDataService<T>(
     // MURID diurus melalui helaian; cache UI disimpan oleh adapter setempat.
     async saveStudents() {},
     async saveStudent(payload) {
-      await request("saveStudent", payload);
+      const data = asRecord(await request("saveStudent", payload));
+      return normalizeStudent(data.student);
     },
     async saveSchool(payload) {
       return normalizeSchool(await request("saveSchool", payload));
@@ -381,16 +457,6 @@ export function createAppsScriptDataService<T>(
     },
     async clearSchools(confirmation) {
       await request("clearSchools", { confirmation });
-    },
-    async rotateSchoolAccessCode(schoolId) {
-      const data = asRecord(await request("rotateSchoolAccessCode", { schoolId }));
-      const accessCode = String(data.access_code ?? data.accessCode ?? "").trim();
-      if (!accessCode) throw new Error("Pelayan tidak memulangkan kod akses baharu.");
-      return {
-        schoolId: String(data.school_id ?? data.schoolId ?? schoolId),
-        accessCode,
-        accessCodeLast4: String(data.access_code_last4 ?? data.accessCodeLast4 ?? accessCode.slice(-4)),
-      };
     },
     async clearAllData(confirmation) {
       await request("clearAllData", { confirmation });
@@ -407,7 +473,7 @@ export function createAppsScriptDataService<T>(
   };
 }
 
-/** Mewujudkan sesi guru terhad berdasarkan kod sekolah yang sah. */
+/** Mewujudkan sesi guru sekolah berdasarkan kod sekolah yang sah. */
 export async function loginWithSchoolCode(
   endpoint: string,
   schoolCode: string,
