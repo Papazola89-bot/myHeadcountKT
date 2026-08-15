@@ -128,6 +128,14 @@ test("school administration uses Google Sheets rather than hardcoded demo rows",
   assert.match(backendSource, /PADAM SEMUA SEKOLAH/);
 });
 
+test("student intake offers Year 2 through Year 6 only", async () => {
+  const appSource = await readFile(new URL("../app/headcount-app.tsx", import.meta.url), "utf8");
+  assert.match(appSource, /const STUDENT_YEARS=\[2,3,4,5,6\] as const/);
+  assert.match(appSource, /\[year,setYear\]=useState\(2\)/);
+  assert.match(appSource, /Pemulihan Khas Tahun 2 hingga Tahun 6/);
+  assert.doesNotMatch(appSource, /<option value="1">Tahun 1<\/option>/);
+});
+
 test("intervention dashboards use Google Sheets and contain no seeded admin totals", async () => {
   const [appSource, serviceSource, backendSource] = await Promise.all([
     readFile(new URL("../app/headcount-app.tsx", import.meta.url), "utf8"),
