@@ -91,7 +91,7 @@ test("school-code sessions are isolated from Google admin sessions", async () =>
   assert.match(serviceSource, /session_token/);
 });
 
-test("owner-only admin and safe operational reset are enforced", async () => {
+test("three full-access admins and safe operational reset are enforced", async () => {
   const [appSource, serviceSource, backendSource] = await Promise.all([
     readFile(new URL("../app/headcount-app.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/lib/data-service.ts", import.meta.url), "utf8"),
@@ -104,9 +104,18 @@ test("owner-only admin and safe operational reset are enforced", async () => {
   assert.doesNotMatch(appSource, /KP12\.4|\+7\.3 KP|Laporan Headcount AR 2/);
   assert.match(serviceSource, /request\("rotateSchoolAccessCode"/);
   assert.match(serviceSource, /request\("clearAllData"/);
-  assert.match(backendSource, /assertOwnerAdminIdentity_\(user\)/);
+  assert.match(appSource, /function AdminModal/);
+  assert.match(appSource, /Tambah Admin/);
+  assert.match(appSource, /Akses penuh/);
+  assert.match(serviceSource, /request\("getAdmins"/);
+  assert.match(serviceSource, /request\("saveAdmin"/);
+  assert.match(backendSource, /MAX_ADMIN_ACCOUNTS = 3/);
+  assert.match(backendSource, /getAdmins: getAdmins_/);
+  assert.match(backendSource, /saveAdmin: saveAdmin_/);
+  assert.match(backendSource, /assertAdminIdentity_\(user\)/);
+  assert.doesNotMatch(backendSource, /assertOwnerAdminIdentity_/);
   assert.match(backendSource, /KOSONGKAN SEMUA DATA/);
-  assert.match(backendSource, /preserved: \["SEKOLAH", "MASTER_KEMAHIRAN", "OWNER_ADMIN"\]/);
+  assert.match(backendSource, /preserved: \["SEKOLAH", "MASTER_KEMAHIRAN", "ADMIN_ACCOUNTS"\]/);
 });
 
 test("school administration uses Google Sheets rather than hardcoded demo rows", async () => {

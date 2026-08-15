@@ -19,6 +19,14 @@ export type UserProfile = {
   schoolZone: string;
 };
 
+export type AdminRecord = {
+  id: string;
+  email: string;
+  name: string;
+  status: "Aktif" | "Tidak Aktif";
+  isCurrent: boolean;
+};
+
 export type SchoolCodeSession = {
   sessionToken: string;
   profile: UserProfile;
@@ -70,6 +78,8 @@ export type InterventionRecord = {
 export type DataService<T> = {
   getProfile(): Promise<UserProfile>;
   saveProfile(name: string): Promise<UserProfile>;
+  getAdmins(): Promise<AdminRecord[]>;
+  saveAdmin(payload: { email: string; name: string }): Promise<AdminRecord>;
   getStudents(): Promise<T[]>;
   getSchools(): Promise<SchoolRecord[]>;
   getInterventions(): Promise<InterventionRecord[]>;
@@ -124,6 +134,18 @@ export function normalizeUserProfile(value: unknown): UserProfile {
     schoolName: String(row.school_name ?? row.schoolName ?? ""),
     schoolCode: String(row.school_code ?? row.schoolCode ?? ""),
     schoolZone: String(row.school_zone ?? row.schoolZone ?? ""),
+  };
+}
+
+function normalizeAdmin(value: unknown): AdminRecord {
+  const row = asRecord(value);
+  const rawStatus = String(row.status ?? "Aktif").toLowerCase();
+  return {
+    id: String(row.user_id ?? row.userId ?? row.id ?? ""),
+    email: String(row.email ?? "").trim().toLowerCase(),
+    name: String(row.nama ?? row.name ?? row.email ?? "Pentadbir"),
+    status: rawStatus === "aktif" ? "Aktif" : "Tidak Aktif",
+    isCurrent: Boolean(row.is_current ?? row.isCurrent),
   };
 }
 
@@ -236,6 +258,12 @@ export function createLocalDataService<T>(key: string): DataService<T> {
     async saveProfile() {
       throw new Error("Profil pengguna tidak boleh disimpan dalam mod lokal.");
     },
+    async getAdmins() {
+      return [];
+    },
+    async saveAdmin() {
+      throw new Error("Pentadbir tidak boleh ditambah dalam mod lokal.");
+    },
     async getStudents() {
       if (typeof window === "undefined") return [];
       const raw = window.localStorage.getItem(key);
@@ -316,6 +344,14 @@ export function createAppsScriptDataService<T>(
     },
     async saveProfile(name) {
       return normalizeUserProfile(await request("saveProfile", { name }));
+    },
+    async getAdmins() {
+      const data = await request("getAdmins");
+      if (!Array.isArray(data)) throw new Error("Senarai pentadbir daripada Google Sheets tidak sah.");
+      return data.map(normalizeAdmin);
+    },
+    async saveAdmin(payload) {
+      return normalizeAdmin(await request("saveAdmin", payload));
     },
     async getStudents() {
       const data = await request("getStudents");

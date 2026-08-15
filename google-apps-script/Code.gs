@@ -15,7 +15,7 @@
  */
 
 var API_NAME = "myHeadcountKT";
-var API_VERSION = "1.1.0";
+var API_VERSION = "1.2.0";
 var DATABASE_ID_PROPERTY = "DATABASE_SPREADSHEET_ID";
 var OWNER_ADMIN_EMAIL_PROPERTY = "OWNER_ADMIN_EMAIL";
 var SCHOOL_SESSION_EPOCH_PROPERTY = "SCHOOL_SESSION_EPOCH";
@@ -28,6 +28,7 @@ var SCHOOL_SESSION_SECONDS = 21600;
 var SCHOOL_ACCESS_CODE_MIN_LENGTH = 12;
 var SCHOOL_LOGIN_MAX_FAILURES = 5;
 var SCHOOL_LOGIN_LOCK_SECONDS = 900;
+var MAX_ADMIN_ACCOUNTS = 3;
 
 var TABLES = {
   SEKOLAH: [
@@ -127,6 +128,8 @@ function doPost(e) {
       logoutSchool: logoutSchool_,
       getProfile: getProfile_,
       saveProfile: saveProfile_,
+      getAdmins: getAdmins_,
+      saveAdmin: saveAdmin_,
       getStudents: getStudents_,
       saveStudent: saveStudent_,
       getSchools: getSchools_,
@@ -248,6 +251,83 @@ function saveProfile_(input, user) {
     audit_(user, "SAVE_PROFILE", before, publicRow_(existing));
     return publicUserProfile_(existing);
   });
+}
+
+/** Senarai maksimum tiga pentadbir Google yang mempunyai akses penuh. */
+function getAdmins_(input, user) {
+  assertAdmin_(user);
+  return rows_("PENGGUNA")
+    .filter(function (row) { return upper_(row.role) === "ADMIN"; })
+    .map(function (row) { return publicAdminRecord_(row, user); })
+    .sort(function (left, right) { return left.nama.localeCompare(right.nama); });
+}
+
+/**
+ * Daftarkan e-mel Google sebagai pentadbir akses penuh. google_sub dibiarkan
+ * kosong sehingga log masuk pertama dan kemudiannya dipautkan oleh pelayan.
+ */
+function saveAdmin_(input, user) {
+  assertAdmin_(user);
+  var email = lower_(requiredText_(input.email, "email", 254));
+  var name = optionalText_(input.name || input.nama, 120);
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    throw apiError_("INVALID_EMAIL", "Masukkan alamat e-mel Google yang sah.");
+  }
+
+  return withWriteLock_(function () {
+    var users = rows_("PENGGUNA");
+    var matches = users.filter(function (row) { return lower_(row.email) === email; });
+    if (matches.length > 1) {
+      throw apiError_("DUPLICATE_USER", "Lebih daripada satu rekod pengguna menggunakan e-mel yang sama.");
+    }
+
+    var existing = matches[0] || null;
+    var activeAdmins = users.filter(function (row) {
+      return upper_(row.role) === "ADMIN" && upper_(row.status) === "AKTIF";
+    });
+    var alreadyActiveAdmin = existing && upper_(existing.role) === "ADMIN" && upper_(existing.status) === "AKTIF";
+    if (!alreadyActiveAdmin && activeAdmins.length >= MAX_ADMIN_ACCOUNTS) {
+      throw apiError_("ADMIN_LIMIT_REACHED", "Sistem ini dihadkan kepada maksimum tiga akaun pentadbir.");
+    }
+
+    if (existing) {
+      var before = publicRow_(existing);
+      var changes = {
+        nama: name || text_(existing.nama) || email,
+        role: "ADMIN",
+        school_id: "",
+        status: "Aktif"
+      };
+      updateRecord_("PENGGUNA", existing._row, changes);
+      existing = mergeRecord_(existing, changes);
+      audit_(user, "SAVE_ADMIN", before, publicRow_(existing));
+      return publicAdminRecord_(existing, user);
+    }
+
+    var record = {
+      user_id: Utilities.getUuid(),
+      google_sub: "",
+      email: email,
+      nama: name || email,
+      role: "ADMIN",
+      school_id: "",
+      status: "Aktif"
+    };
+    appendRecord_("PENGGUNA", record);
+    audit_(user, "SAVE_ADMIN", null, publicRow_(record));
+    return publicAdminRecord_(record, user);
+  });
+}
+
+function publicAdminRecord_(admin, currentUser) {
+  return {
+    user_id: text_(admin.user_id),
+    email: lower_(admin.email),
+    nama: text_(admin.nama) || lower_(admin.email),
+    role: "ADMIN",
+    status: upper_(admin.status) === "AKTIF" ? "Aktif" : "Tidak Aktif",
+    is_current: Boolean(currentUser && same_(admin.user_id, currentUser.user_id))
+  };
 }
 
 function publicUserProfile_(user) {
@@ -453,8 +533,8 @@ function clearSchools_(input, user) {
 
 /**
  * Kosongkan semua data operasi tanpa memadam konfigurasi sistem.
- * Dikekalkan: SEKOLAH (termasuk hash kod akses), MASTER_KEMAHIRAN dan akaun
- * Google pemilik. Semua sesi kod sekolah sedia ada dibatalkan melalui epoch.
+ * Dikekalkan: SEKOLAH (termasuk hash kod akses), MASTER_KEMAHIRAN dan semua
+ * akaun pentadbir. Semua sesi kod sekolah sedia ada dibatalkan melalui epoch.
  */
 function clearAllData_(input, user) {
   assertAdmin_(user);
@@ -463,16 +543,19 @@ function clearAllData_(input, user) {
   }
 
   return withWriteLock_(function () {
-    var ownerEmail = ownerAdminEmail_();
-    var adminRecord = {
-      user_id: text_(user.user_id) || Utilities.getUuid(),
-      google_sub: text_(user.google_sub),
-      email: ownerEmail,
-      nama: text_(user.nama) || "Pentadbir Sistem",
-      role: "ADMIN",
-      school_id: "",
-      status: "Aktif"
-    };
+    var adminRecords = rows_("PENGGUNA").filter(function (row) {
+      return upper_(row.role) === "ADMIN";
+    }).map(function (row) {
+      return {
+        user_id: text_(row.user_id) || Utilities.getUuid(),
+        google_sub: text_(row.google_sub),
+        email: lower_(row.email),
+        nama: text_(row.nama) || lower_(row.email),
+        role: "ADMIN",
+        school_id: "",
+        status: upper_(row.status) === "AKTIF" ? "Aktif" : "Tidak Aktif"
+      };
+    });
     var clearedTables = ["MURID", "PENILAIAN", "SASARAN", "INTERVENSI", "SUBMISSION", "AUDIT_LOG"];
     var deleted = {};
 
@@ -480,17 +563,15 @@ function clearAllData_(input, user) {
       deleted[name] = rows_(name).length;
       clearDataRows_(name);
     });
-    deleted.PENGGUNA = rows_("PENGGUNA").filter(function (row) {
-      return lower_(row.email) !== ownerEmail;
-    }).length;
+    deleted.PENGGUNA = rows_("PENGGUNA").length - adminRecords.length;
     clearDataRows_("PENGGUNA");
-    appendRecord_("PENGGUNA", adminRecord);
+    adminRecords.forEach(function (adminRecord) { appendRecord_("PENGGUNA", adminRecord); });
     bumpSchoolSessionEpoch_();
 
-    audit_(adminRecord, "CLEAR_ALL_DATA", {
+    audit_(user, "CLEAR_ALL_DATA", {
       deleted: deleted
     }, {
-      preserved: ["SEKOLAH", "MASTER_KEMAHIRAN", "OWNER_ADMIN"]
+      preserved: ["SEKOLAH", "MASTER_KEMAHIRAN", "ADMIN_ACCOUNTS"]
     });
     return {
       cleared: true,
@@ -498,7 +579,7 @@ function clearAllData_(input, user) {
       preserved: {
         schools: rows_("SEKOLAH").length,
         master_skills: rows_("MASTER_KEMAHIRAN").length,
-        owner_admin: ownerEmail
+        admin_accounts: adminRecords.map(function (admin) { return admin.email; })
       },
       school_sessions_revoked: true
     };
@@ -807,9 +888,9 @@ function currentUser_(input) {
   user.role = normalizeRole_(user.role);
   user._auth_type = "GOOGLE";
   user._identity_email = identity.email;
-  // Google hanya pintu masuk pemilik/admin. Semua guru mesti menggunakan kod
+  // Google hanya pintu masuk pentadbir berdaftar. Semua guru mesti menggunakan kod
   // akses sekolah dan tidak boleh menaik taraf peranan melalui rekod PENGGUNA.
-  assertOwnerAdminIdentity_(user);
+  assertAdminIdentity_(user);
   user.role = "ADMIN";
   user.school_id = "";
   return user;
@@ -1428,20 +1509,18 @@ function assertAdmin_(user) {
   if (!user || normalizeRole_(user.role) !== "ADMIN") {
     throw apiError_("ROLE_FORBIDDEN", "Tindakan ini hanya dibenarkan untuk pentadbir.");
   }
-  assertOwnerAdminIdentity_(user);
+  assertAdminIdentity_(user);
 }
 
-function ownerAdminEmail_() {
-  var email = lower_(PropertiesService.getScriptProperties().getProperty(OWNER_ADMIN_EMAIL_PROPERTY));
-  if (!email) {
-    throw apiError_("OWNER_ADMIN_NOT_CONFIGURED", "Jalankan setupDatabase() sebagai pemilik untuk menetapkan pentadbir tunggal.");
-  }
-  return email;
-}
-
-function assertOwnerAdminIdentity_(user) {
-  if (!user || text_(user._auth_type) !== "GOOGLE" || lower_(user.email) !== ownerAdminEmail_()) {
-    throw apiError_("ADMIN_ACCESS_DENIED", "Akses admin hanya dibenarkan kepada akaun Google pemilik sistem.");
+function assertAdminIdentity_(user) {
+  if (
+    !user ||
+    text_(user._auth_type) !== "GOOGLE" ||
+    normalizeRole_(user.role) !== "ADMIN" ||
+    upper_(user.status) !== "AKTIF" ||
+    lower_(user.email) !== lower_(user._identity_email)
+  ) {
+    throw apiError_("ADMIN_ACCESS_DENIED", "Akses admin hanya dibenarkan kepada akaun Google pentadbir yang aktif dan berdaftar.");
   }
 }
 
