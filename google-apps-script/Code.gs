@@ -15,7 +15,7 @@
  */
 
 var API_NAME = "myHeadcountKT";
-var API_VERSION = "1.5.0";
+var API_VERSION = "1.6.0";
 var DATABASE_ID_PROPERTY = "DATABASE_SPREADSHEET_ID";
 var OWNER_ADMIN_EMAIL_PROPERTY = "OWNER_ADMIN_EMAIL";
 var SCHOOL_SESSION_EPOCH_PROPERTY = "SCHOOL_SESSION_EPOCH";
@@ -39,7 +39,15 @@ var TABLES = {
   MURID: ["student_id", "school_id", "nama", "tahun", "kelas", "tarikh_mula", "subject", "status"],
   PENILAIAN: ["assessment_id", "student_id", "subject", "tahun_data", "cycle", "skill_code", "tarikh", "teacher_id", "timestamp"],
   SASARAN: ["student_id", "OTI1", "OTI2", "OTI3", "ETR", "manual_override", "updated_at"],
-  INTERVENSI: ["intervention_id", "student_id", "skill_code", "isu", "intervensi", "kaedah", "tarikh_mula", "tarikh_semakan", "evidens", "outcome", "status", "teacher_id"],
+  INTERVENSI: [
+    "intervention_id", "student_id", "skill_code", "isu", "intervensi", "kaedah",
+    "tarikh_mula", "tarikh_semakan", "evidens", "outcome", "status", "teacher_id",
+    "group_id", "batch_id", "request_id", "catatan", "skill_name"
+  ],
+  KUMPULAN_INTERVENSI: [
+    "group_id", "school_id", "group_name", "skill_code", "skill_name",
+    "student_ids_json", "created_at", "updated_at", "created_by"
+  ],
   SUBMISSION: ["school_id", "tahun", "subject", "cycle", "status", "submitted_at", "verified_at", "verified_by"],
   PERPINDAHAN: [
     "transfer_id", "student_id", "student_name", "from_school_id", "to_school_id",
@@ -147,9 +155,13 @@ function doPost(e) {
       clearSchools: clearSchools_,
       clearAllData: clearAllData_,
       getInterventions: getInterventions_,
+      getInterventionGroups: getInterventionGroups_,
+      saveInterventionGroup: saveInterventionGroup_,
+      deleteInterventionGroup: deleteInterventionGroup_,
       saveAssessment: saveAssessment_,
       saveTargets: saveTargets_,
       saveIntervention: saveIntervention_,
+      saveInterventionBatch: saveInterventionBatch_,
       submitCycle: submitCycle_
     };
 
@@ -571,7 +583,7 @@ function clearAllData_(input, user) {
         status: upper_(row.status) === "AKTIF" ? "Aktif" : "Tidak Aktif"
       };
     });
-    var clearedTables = ["MURID", "PENILAIAN", "SASARAN", "INTERVENSI", "SUBMISSION", "PERPINDAHAN", "AUDIT_LOG"];
+    var clearedTables = ["MURID", "PENILAIAN", "SASARAN", "INTERVENSI", "KUMPULAN_INTERVENSI", "SUBMISSION", "PERPINDAHAN", "AUDIT_LOG"];
     var deleted = {};
 
     clearedTables.forEach(function (name) {
@@ -635,6 +647,75 @@ function getInterventions_(input, user) {
     result.school_id = text_(student.school_id);
     result.school_name = school ? text_(school.nama_sekolah) : "";
     return result;
+  });
+}
+
+/** Kumpulan hanya menyimpan rujukan ID murid; profil dan sejarah tidak diduplikasi. */
+function getInterventionGroups_(input, user) {
+  var schoolId = authorizedSchoolScope_(user, input.school_id || input.schoolId, true);
+  return rows_("KUMPULAN_INTERVENSI").filter(function (row) {
+    return !schoolId || same_(row.school_id, schoolId);
+  }).map(function (row) {
+    var result = publicRow_(row);
+    result.student_ids = parseStudentIds_(row.student_ids_json);
+    return result;
+  });
+}
+
+function saveInterventionGroup_(input, user) {
+  if (normalizeRole_(user.role) === "ADMIN") {
+    throw apiError_("ROLE_FORBIDDEN", "Kumpulan intervensi diurus oleh guru sekolah.");
+  }
+  var groupId = optionalText_(input.groupId || input.group_id, 100);
+  var studentIds = normalizeStudentIds_(input.studentIds || input.student_ids);
+  var students = studentIds.map(function (studentId) { return ownedStudent_(studentId, user); });
+  var subject = assertSameStudentSubject_(students);
+  var skillCode = normalizeSkill_(input.skillCode || input.skill_code);
+  assertSkill_(skillCode, subject);
+  var now = new Date();
+
+  return withWriteLock_(function () {
+    var existing = groupId
+      ? findRow_("KUMPULAN_INTERVENSI", function (row) { return same_(row.group_id, groupId); })
+      : null;
+    if (groupId && !existing) throw apiError_("GROUP_NOT_FOUND", "Kumpulan intervensi tidak ditemui.");
+    if (existing && !same_(existing.school_id, user.school_id)) {
+      throw apiError_("GROUP_ACCESS_DENIED", "Kumpulan ini bukan di bawah sekolah anda.");
+    }
+    var record = {
+      group_id: groupId || Utilities.getUuid(),
+      school_id: user.school_id,
+      group_name: requiredText_(input.groupName || input.group_name || input.name, "groupName", 200),
+      skill_code: skillCode,
+      skill_name: optionalText_(input.skillName || input.skill_name, 300),
+      student_ids_json: JSON.stringify(studentIds),
+      created_at: existing ? existing.created_at : now,
+      updated_at: now,
+      created_by: existing ? existing.created_by : user.user_id
+    };
+    if (existing) updateRecord_("KUMPULAN_INTERVENSI", existing._row, record);
+    else appendRecord_("KUMPULAN_INTERVENSI", record);
+    audit_(user, existing ? "UPDATE_INTERVENTION_GROUP" : "CREATE_INTERVENTION_GROUP", existing || null, record);
+    var result = publicRow_(record);
+    result.student_ids = studentIds;
+    return result;
+  });
+}
+
+function deleteInterventionGroup_(input, user) {
+  if (normalizeRole_(user.role) === "ADMIN") {
+    throw apiError_("ROLE_FORBIDDEN", "Kumpulan intervensi diurus oleh guru sekolah.");
+  }
+  var groupId = requiredText_(input.groupId || input.group_id, "groupId", 100);
+  return withWriteLock_(function () {
+    var existing = findRow_("KUMPULAN_INTERVENSI", function (row) { return same_(row.group_id, groupId); });
+    if (!existing) throw apiError_("GROUP_NOT_FOUND", "Kumpulan intervensi tidak ditemui.");
+    if (!same_(existing.school_id, user.school_id)) {
+      throw apiError_("GROUP_ACCESS_DENIED", "Kumpulan ini bukan di bawah sekolah anda.");
+    }
+    deleteRecord_("KUMPULAN_INTERVENSI", existing._row);
+    audit_(user, "DELETE_INTERVENTION_GROUP", existing, { group_id: groupId, history_preserved: true });
+    return { deleted: true, group_id: groupId, history_preserved: true };
   });
 }
 
@@ -977,7 +1058,7 @@ function saveIntervention_(input, user) {
     student_id: studentId,
     skill_code: skillCode,
     isu: requiredText_(input.issue || input.isu, "issue", 500),
-    intervensi: requiredText_(input.action || input.intervensi, "action", 5000),
+    intervensi: requiredText_(input.intervensi || input.interventionText, "intervensi", 5000),
     kaedah: requiredText_(input.method || input.kaedah, "method", 500),
     tarikh_mula: startDate,
     tarikh_semakan: reviewDate,
@@ -1013,6 +1094,104 @@ function saveIntervention_(input, user) {
       student_id: studentId,
       school_id: student.school_id,
       status: record.status
+    };
+  });
+}
+
+/**
+ * Satu panggilan frontend dan satu setValues() merekod intervensi bagi semua ahli.
+ * request_id menjadi kunci idempotensi supaya Retry tidak menghasilkan baris berganda.
+ */
+function saveInterventionBatch_(input, user) {
+  if (normalizeRole_(user.role) === "ADMIN") {
+    throw apiError_("ROLE_FORBIDDEN", "Rekod intervensi disimpan oleh guru sekolah.");
+  }
+  var requestId = normalizeRequestId_(input.request_id);
+  var groupId = optionalText_(input.groupId || input.group_id, 100);
+  var issue = requiredText_(input.issue || input.isu, "issue", 500);
+  var action = requiredText_(input.intervensi || input.interventionText, "intervensi", 5000);
+  var method = requiredText_(input.method || input.kaedah, "method", 500);
+  var notes = optionalText_(input.notes || input.catatan, 5000);
+  var startDate = requiredDate_(input.startDate || input.start || input.tarikh_mula, "startDate");
+  var reviewDate = requiredDate_(input.reviewDate || input.review || input.tarikh_semakan, "reviewDate");
+  if (reviewDate.getTime() < startDate.getTime()) {
+    throw apiError_("VALIDATION_ERROR", "Tarikh semakan tidak boleh lebih awal daripada tarikh mula.");
+  }
+
+  return withWriteLock_(function () {
+    var allowedStudentIds = {};
+    authorizedStudentRows_(user, user.school_id).forEach(function (student) {
+      allowedStudentIds[text_(student.student_id)] = true;
+    });
+    var existingRows = rows_("INTERVENSI").filter(function (row) {
+      return same_(row.request_id, requestId) && Boolean(allowedStudentIds[text_(row.student_id)]);
+    });
+    if (existingRows.length) {
+      return {
+        saved: true,
+        already_saved: true,
+        request_id: requestId,
+        batch_id: text_(existingRows[0].batch_id),
+        count: existingRows.length,
+        records: existingRows.map(publicRow_)
+      };
+    }
+
+    var group = null;
+    var studentIds;
+    if (groupId) {
+      group = findRow_("KUMPULAN_INTERVENSI", function (row) { return same_(row.group_id, groupId); });
+      if (!group) throw apiError_("GROUP_NOT_FOUND", "Kumpulan intervensi tidak ditemui.");
+      if (!same_(group.school_id, user.school_id)) {
+        throw apiError_("GROUP_ACCESS_DENIED", "Kumpulan ini bukan di bawah sekolah anda.");
+      }
+      studentIds = normalizeStudentIds_(parseStudentIds_(group.student_ids_json));
+    } else {
+      studentIds = normalizeStudentIds_(input.studentIds || input.student_ids);
+    }
+    var students = studentIds.map(function (studentId) { return ownedStudent_(studentId, user); });
+    var subject = assertSameStudentSubject_(students);
+    var skillCode = normalizeSkill_(input.skillCode || input.skill_code || (group && group.skill_code));
+    assertSkill_(skillCode, subject);
+    var skillName = optionalText_(input.skillName || input.skill_name || (group && group.skill_name), 300);
+    var batchId = Utilities.getUuid();
+    var status = optionalText_(input.status, 100) || "Sedang dilaksanakan";
+    var records = students.map(function (student) {
+      return {
+        intervention_id: Utilities.getUuid(),
+        student_id: student.student_id,
+        skill_code: skillCode,
+        isu: issue,
+        intervensi: action,
+        kaedah: method,
+        tarikh_mula: startDate,
+        tarikh_semakan: reviewDate,
+        evidens: "",
+        outcome: "",
+        status: status,
+        teacher_id: user.user_id,
+        group_id: groupId,
+        batch_id: batchId,
+        request_id: requestId,
+        catatan: notes,
+        skill_name: skillName
+      };
+    });
+    appendRecords_("INTERVENSI", records);
+    audit_(user, "SAVE_INTERVENTION_BATCH", null, {
+      batch_id: batchId,
+      request_id: requestId,
+      group_id: groupId,
+      student_ids: studentIds,
+      count: records.length
+    });
+    return {
+      saved: true,
+      already_saved: false,
+      request_id: requestId,
+      batch_id: batchId,
+      count: records.length,
+      records: records.map(publicRow_)
     };
   });
 }
@@ -1525,6 +1704,44 @@ function groupByStudent_(records, allowedStudentIds) {
   return grouped;
 }
 
+function parseStudentIds_(value) {
+  if (Array.isArray(value)) return value;
+  if (!text_(value)) return [];
+  try {
+    var parsed = JSON.parse(text_(value));
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (error) {
+    return [];
+  }
+}
+
+function normalizeStudentIds_(value) {
+  if (!Array.isArray(value)) {
+    throw apiError_("VALIDATION_ERROR", "Senarai studentIds diperlukan.");
+  }
+  var seen = {};
+  var result = [];
+  value.forEach(function (studentId) {
+    var normalized = requiredText_(studentId, "studentId", 100);
+    if (!seen[normalized]) {
+      seen[normalized] = true;
+      result.push(normalized);
+    }
+  });
+  if (!result.length) throw apiError_("VALIDATION_ERROR", "Pilih sekurang-kurangnya seorang murid.");
+  if (result.length > 100) throw apiError_("VALIDATION_ERROR", "Satu kumpulan dihadkan kepada 100 murid.");
+  return result;
+}
+
+function assertSameStudentSubject_(students) {
+  if (!students.length) throw apiError_("VALIDATION_ERROR", "Pilih sekurang-kurangnya seorang murid.");
+  var subject = normalizeSubject_(students[0].subject);
+  if (students.some(function (student) { return !same_(student.subject, subject); })) {
+    throw apiError_("SUBJECT_MISMATCH", "Semua ahli kumpulan mesti daripada mata pelajaran yang sama.");
+  }
+  return subject;
+}
+
 function parseRequest_(e) {
   if (!e || !e.postData || typeof e.postData.contents !== "string") {
     throw apiError_("INVALID_REQUEST", "Badan permintaan JSON diperlukan.");
@@ -1608,6 +1825,21 @@ function appendRecord_(name, record, spreadsheet) {
   });
   sheet.appendRow(row);
   return sheet.getLastRow();
+}
+
+function appendRecords_(name, records, spreadsheet) {
+  if (!records.length) return 0;
+  var ss = spreadsheet || database_();
+  var sheet = ss.getSheetByName(name);
+  if (!sheet) throw apiError_("TABLE_NOT_FOUND", "Tab " + name + " belum diwujudkan.");
+  var headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0].map(text_);
+  var values = records.map(function (record) {
+    return headers.map(function (header) {
+      return Object.prototype.hasOwnProperty.call(record, header) ? sheetValue_(record[header]) : "";
+    });
+  });
+  sheet.getRange(sheet.getLastRow() + 1, 1, values.length, headers.length).setValues(values);
+  return values.length;
 }
 
 function updateRecord_(name, rowNumber, record, spreadsheet) {

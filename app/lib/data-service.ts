@@ -88,6 +88,29 @@ export type InterventionRecord = {
   reviewDate: string;
   outcome: string;
   status: string;
+  groupId: string;
+  batchId: string;
+  requestId: string;
+  notes: string;
+  skillName: string;
+};
+
+export type InterventionGroupRecord = {
+  id: string;
+  schoolId: string;
+  name: string;
+  skillCode: string;
+  skillName: string;
+  studentIds: string[];
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type InterventionBatchResult = {
+  records: InterventionRecord[];
+  count: number;
+  requestId: string;
+  alreadySaved: boolean;
 };
 
 export type DataService<T> = {
@@ -102,6 +125,7 @@ export type DataService<T> = {
   getStudents(): Promise<T[]>;
   getSchools(): Promise<SchoolRecord[]>;
   getInterventions(): Promise<InterventionRecord[]>;
+  getInterventionGroups(): Promise<InterventionGroupRecord[]>;
   saveStudents(students: T[]): Promise<void>;
   saveStudent(payload: Record<string, unknown>): Promise<T>;
   saveStudentSubjects(payload: Record<string, unknown>): Promise<T[]>;
@@ -117,6 +141,9 @@ export type DataService<T> = {
   ): Promise<void>;
   saveTargets(payload: Record<string, unknown>): Promise<void>;
   saveIntervention(payload: Record<string, unknown>): Promise<void>;
+  saveInterventionGroup(payload: Record<string, unknown>): Promise<InterventionGroupRecord>;
+  deleteInterventionGroup(groupId: string): Promise<void>;
+  saveInterventionBatch(payload: Record<string, unknown>, requestId: string): Promise<InterventionBatchResult>;
   submitCycle(cycle: string, context: SubmissionContext): Promise<void>;
 };
 
@@ -234,6 +261,36 @@ function normalizeIntervention(value: unknown): InterventionRecord {
     reviewDate: String(row.tarikh_semakan ?? row.reviewDate ?? "").slice(0, 10),
     outcome: String(row.outcome ?? ""),
     status: String(row.status ?? ""),
+    groupId: String(row.group_id ?? row.groupId ?? ""),
+    batchId: String(row.batch_id ?? row.batchId ?? ""),
+    requestId: String(row.request_id ?? row.requestId ?? ""),
+    notes: String(row.catatan ?? row.notes ?? ""),
+    skillName: String(row.skill_name ?? row.skillName ?? ""),
+  };
+}
+
+function normalizeInterventionGroup(value: unknown): InterventionGroupRecord {
+  const row = asRecord(value);
+  const rawStudentIds = row.student_ids ?? row.studentIds ?? row.student_ids_json;
+  let studentIds: string[] = [];
+  if (Array.isArray(rawStudentIds)) studentIds = rawStudentIds.map(String).filter(Boolean);
+  else if (typeof rawStudentIds === "string" && rawStudentIds.trim()) {
+    try {
+      const parsed = JSON.parse(rawStudentIds);
+      if (Array.isArray(parsed)) studentIds = parsed.map(String).filter(Boolean);
+    } catch {
+      studentIds = rawStudentIds.split(",").map((id) => id.trim()).filter(Boolean);
+    }
+  }
+  return {
+    id: String(row.group_id ?? row.groupId ?? row.id ?? ""),
+    schoolId: String(row.school_id ?? row.schoolId ?? ""),
+    name: String(row.group_name ?? row.groupName ?? row.name ?? "Tanpa nama"),
+    skillCode: String(row.skill_code ?? row.skillCode ?? ""),
+    skillName: String(row.skill_name ?? row.skillName ?? ""),
+    studentIds: [...new Set(studentIds)],
+    createdAt: String(row.created_at ?? row.createdAt ?? ""),
+    updatedAt: String(row.updated_at ?? row.updatedAt ?? ""),
   };
 }
 
@@ -342,6 +399,9 @@ export function createLocalDataService<T>(key: string): DataService<T> {
     async getInterventions() {
       return [];
     },
+    async getInterventionGroups() {
+      return [];
+    },
     async saveStudents(students) {
       window.localStorage.setItem(key, JSON.stringify(students));
     },
@@ -367,6 +427,15 @@ export function createLocalDataService<T>(key: string): DataService<T> {
     async saveAssessment() {},
     async saveTargets() {},
     async saveIntervention() {},
+    async saveInterventionGroup() {
+      throw new Error("Kumpulan intervensi tidak boleh disimpan dalam mod lokal.");
+    },
+    async deleteInterventionGroup() {
+      throw new Error("Kumpulan intervensi tidak boleh dipadam dalam mod lokal.");
+    },
+    async saveInterventionBatch() {
+      throw new Error("Intervensi tidak boleh disimpan dalam mod lokal.");
+    },
     async submitCycle() {},
   };
 }
@@ -376,20 +445,26 @@ export function createAppsScriptDataService<T>(
   normalizeStudent: (value: unknown) => T = (value) => value as T,
   getCredential: () => AppsScriptCredential = () => ({}),
 ): DataService<T> {
-  const request = async (action: string, payload: JsonRecord = {}): Promise<unknown> => {
+  const request = async (action: string, payload: JsonRecord = {}, stableRequestId?: string): Promise<unknown> => {
     const credential = getCredential();
     const idToken = String(credential.idToken ?? "").trim();
     const schoolSessionToken = String(credential.schoolSessionToken ?? "").trim();
     if (!idToken && !schoolSessionToken) {
       throw new Error("Sila log masuk sebelum mengakses Google Sheets.");
     }
-    const requestId = globalThis.crypto.randomUUID();
+    const requestId = stableRequestId || globalThis.crypto.randomUUID();
+    // `action` ialah nama dispatcher API. Klien lama turut menggunakan medan
+    // `action` untuk teks intervensi, jadi alihkan teks itu ke `intervensi`
+    // sebelum menetapkan nama dispatcher secara muktamad.
+    const safePayload = /Intervention/.test(action) && typeof payload.action === "string"
+      ? { ...payload, intervensi: payload.action }
+      : payload;
     const response = await fetch(endpoint, {
       method: "POST",
       headers: { "Content-Type": "text/plain;charset=utf-8" },
       body: JSON.stringify({
+        ...safePayload,
         action,
-        ...payload,
         request_id: requestId,
         ...(idToken ? { idToken } : { schoolSessionToken }),
       }),
@@ -456,6 +531,11 @@ export function createAppsScriptDataService<T>(
       if (!Array.isArray(data)) throw new Error("Senarai intervensi daripada Google Sheets tidak sah.");
       return data.map(normalizeIntervention);
     },
+    async getInterventionGroups() {
+      const data = await request("getInterventionGroups");
+      if (!Array.isArray(data)) throw new Error("Senarai kumpulan intervensi daripada Google Sheets tidak sah.");
+      return data.map(normalizeInterventionGroup);
+    },
     // MURID diurus melalui helaian; cache UI disimpan oleh adapter setempat.
     async saveStudents() {},
     async saveStudent(payload) {
@@ -487,6 +567,22 @@ export function createAppsScriptDataService<T>(
     },
     async saveIntervention(payload) {
       await request("saveIntervention", payload);
+    },
+    async saveInterventionGroup(payload) {
+      return normalizeInterventionGroup(await request("saveInterventionGroup", payload));
+    },
+    async deleteInterventionGroup(groupId) {
+      await request("deleteInterventionGroup", { groupId });
+    },
+    async saveInterventionBatch(payload, requestId) {
+      const data = asRecord(await request("saveInterventionBatch", payload, requestId));
+      const records = Array.isArray(data.records) ? data.records.map(normalizeIntervention) : [];
+      return {
+        records,
+        count: Number(data.count ?? records.length),
+        requestId: String(data.request_id ?? data.requestId ?? requestId),
+        alreadySaved: Boolean(data.already_saved ?? data.alreadySaved),
+      };
     },
     async submitCycle(cycle, context) {
       await request("submitCycle", { cycle, ...context });

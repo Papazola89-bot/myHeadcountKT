@@ -54,7 +54,7 @@ test("loads and updates the authenticated Google Sheets profile", async () => {
   assert.match(appSource, /authStatus!=="signed-in"/);
   assert.match(appSource, /function LoginScreen/);
   assert.match(appSource, /if\(!s\)return null/);
-  assert.match(appSource, /students\[0\]\?\.id\|\|""/);
+  assert.match(appSource, /const initialStudent=selected\|\|students\[0\]/);
   assert.doesNotMatch(appSource, /students\.find\(x=>x\.id===item\.studentId\)!/);
   assert.match(appSource, /aria-label=\{notificationsOpen\?"Tutup notifikasi":"Buka notifikasi"\}/);
   assert.match(appSource, /Tandakan semua dibaca/);
@@ -259,6 +259,124 @@ test("intervention dashboards use Google Sheets and contain no seeded admin tota
   assert.match(serviceSource, /request\("getInterventions"\)/);
   assert.match(backendSource, /getInterventions: getInterventions_/);
   assert.match(backendSource, /function getInterventions_/);
+});
+
+test("intervention groups preserve membership references and use one idempotent batch write", async () => {
+  const [appSource, serviceSource, backendSource] = await Promise.all([
+    readFile(new URL("../app/headcount-app.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/lib/data-service.ts", import.meta.url), "utf8"),
+    readFile(new URL("../google-apps-script/Code.gs", import.meta.url), "utf8"),
+  ]);
+  assert.match(appSource, /Intervensi Individu/);
+  assert.match(appSource, /Intervensi Berkumpulan/);
+  assert.match(appSource, /Cipta Kumpulan/);
+  assert.match(appSource, /Lihat Ahli/);
+  assert.match(appSource, /Belum Berkumpulan/);
+  assert.match(appSource, /if\(savingRef\.current\|\|!validTarget\|\|!action\.trim\(\)\)return/);
+  assert.match(appSource, /Data borang masih dikekalkan/);
+  assert.doesNotMatch(appSource, /saveInterventionBatch\([^\n]*onChange/);
+  assert.doesNotMatch(appSource, /saveIntervention=async[\s\S]{0,1500}setSheetStatus\("fallback"\)/);
+  assert.match(serviceSource, /request\("saveInterventionBatch", payload, requestId\)/);
+  assert.match(backendSource, /KUMPULAN_INTERVENSI/);
+  assert.match(backendSource, /history_preserved: true/);
+  assert.match(backendSource, /same_\(row\.request_id, requestId\)/);
+  assert.match(backendSource, /appendRecords_\("INTERVENSI", records\)/);
+  assert.match(backendSource, /setValues\(values\)/);
+  assert.doesNotThrow(() => new Function(backendSource));
+});
+
+test("individual and four-member group intervention each issue one frontend request", async () => {
+  const { createAppsScriptDataService } = await importTypeScript("../app/lib/data-service.ts");
+  const originalFetch = globalThis.fetch;
+  const calls = [];
+  globalThis.fetch = async (_url, init) => {
+    const body = JSON.parse(init.body);
+    calls.push(body);
+    const ids = body.studentIds ?? ["ST-1", "ST-2", "ST-3", "ST-4"];
+    return new Response(JSON.stringify({
+      ok: true,
+      data: {
+        count: ids.length,
+        request_id: body.request_id,
+        already_saved: false,
+        records: ids.map((studentId, index) => ({
+          intervention_id: `IV-${index + 1}`,
+          student_id: studentId,
+          skill_code: "KP8",
+          isu: "Lemah membaca perkataan",
+          intervensi: "Latihan KVK",
+          kaedah: "Kumpulan kecil",
+          tarikh_mula: "2026-08-20",
+          tarikh_semakan: "2026-08-27",
+          status: "Sedang dilaksanakan",
+        })),
+      },
+    }), { status: 200 });
+  };
+  try {
+    const service = createAppsScriptDataService("https://example.test/exec", (value) => value, () => ({ schoolSessionToken: "session" }));
+    const individualId = "11111111-1111-4111-8111-111111111111";
+    const individual = await service.saveInterventionBatch({ studentIds: ["ST-1"], skillCode: "KP8", action: "Latihan KVK" }, individualId);
+    assert.equal(individual.count, 1);
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].request_id, individualId);
+    const groupId = "22222222-2222-4222-8222-222222222222";
+    const grouped = await service.saveInterventionBatch({ groupId: "GRP-1", skillCode: "KP8", action: "Latihan KVK" }, groupId);
+    assert.equal(grouped.count, 4);
+    assert.equal(calls.length, 2);
+    assert.equal(calls[1].action, "saveInterventionBatch");
+    assert.equal(calls[1].request_id, groupId);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("failed intervention sync rejects without creating a retry request id", async () => {
+  const { createAppsScriptDataService } = await importTypeScript("../app/lib/data-service.ts");
+  const originalFetch = globalThis.fetch;
+  const calls = [];
+  globalThis.fetch = async (_url, init) => {
+    calls.push(JSON.parse(init.body));
+    return new Response(JSON.stringify({ ok: false, error: { message: "Simulasi Sheets gagal" } }), { status: 200 });
+  };
+  try {
+    const service = createAppsScriptDataService("https://example.test/exec", (value) => value, () => ({ schoolSessionToken: "session" }));
+    const requestId = "33333333-3333-4333-8333-333333333333";
+    await assert.rejects(() => service.saveInterventionBatch({ studentIds: ["ST-1"] }, requestId), /Simulasi Sheets gagal/);
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].request_id, requestId);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("editing a group changes only its student id references", async () => {
+  const { createAppsScriptDataService } = await importTypeScript("../app/lib/data-service.ts");
+  const originalFetch = globalThis.fetch;
+  const calls = [];
+  globalThis.fetch = async (_url, init) => {
+    const body = JSON.parse(init.body);
+    calls.push(body);
+    return new Response(JSON.stringify({ ok: true, data: {
+      group_id: body.groupId,
+      school_id: "SCH-1",
+      group_name: body.groupName,
+      skill_code: body.skillCode,
+      skill_name: body.skillName,
+      student_ids: body.studentIds,
+    } }), { status: 200 });
+  };
+  try {
+    const service = createAppsScriptDataService("https://example.test/exec", (value) => value, () => ({ schoolSessionToken: "session" }));
+    const updated = await service.saveInterventionGroup({ groupId: "GRP-1", groupName: "Kumpulan KVK 1", skillCode: "KP8", skillName: "Perkataan KVK", studentIds: ["ST-1", "ST-3", "ST-4", "ST-5"] });
+    assert.deepEqual(updated.studentIds, ["ST-1", "ST-3", "ST-4", "ST-5"]);
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].action, "saveInterventionGroup");
+    assert.equal(calls[0].groupId, "GRP-1");
+    assert.equal("student" in calls[0], false);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
 
 test("includes product-specific social metadata", async () => {
