@@ -42,7 +42,7 @@ test("renders the myHeadcountKT product shell", async () => {
   assert.doesNotMatch(html, /codex-preview|Your site is taking shape|react-loading-skeleton/i);
 });
 
-test("loads and updates the authenticated Google Sheets profile", async () => {
+test("loads and updates the authenticated Supabase profile", async () => {
   const [appSource, serviceSource, backendSource, stylesSource] = await Promise.all([
     readFile(new URL("../app/headcount-app.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/lib/data-service.ts", import.meta.url), "utf8"),
@@ -100,7 +100,7 @@ test("school-code sessions are isolated from Google admin sessions", async () =>
   assert.match(serviceSource, /session_token/);
 });
 
-test("blocks the portal while Google Sheets syncs and shows explicit results", async () => {
+test("blocks the portal while Supabase syncs and shows explicit results", async () => {
   const [appSource, stylesSource] = await Promise.all([
     readFile(new URL("../app/headcount-app.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
@@ -108,7 +108,7 @@ test("blocks the portal while Google Sheets syncs and shows explicit results", a
   assert.match(appSource, /function SyncLoadingScreen/);
   assert.match(appSource, /function SyncResultScreen/);
   assert.match(appSource, /sheetStatus==="connecting"\|\|sheetStatus==="idle"/);
-  assert.match(appSource, /Menyelaraskan data Google Sheets/);
+  assert.match(appSource, /Menyelaraskan data Supabase/);
   assert.match(appSource, /Data berjaya diselaraskan/);
   assert.match(appSource, /Cuba Semula/);
   assert.match(appSource, /Masuk ke Portal/);
@@ -146,7 +146,7 @@ test("three full-access admins and official school-code login are enforced", asy
   assert.doesNotMatch(backendSource, /loginTeacher:|saveTeacher:|rotateTeacherAccessCode:/);
 });
 
-test("school administration uses Google Sheets rather than hardcoded demo rows", async () => {
+test("school administration uses Supabase rather than hardcoded demo rows", async () => {
   const [appSource, serviceSource, backendSource] = await Promise.all([
     readFile(new URL("../app/headcount-app.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/lib/data-service.ts", import.meta.url), "utf8"),
@@ -246,7 +246,7 @@ test("student transfers preserve history, support school import, and retain Apun
   assert.match(backendSource, /same_\(row\.from_school_id, user\.school_id\) \|\| same_\(row\.to_school_id, user\.school_id\)/);
 });
 
-test("intervention dashboards use Google Sheets and contain no seeded admin totals", async () => {
+test("intervention dashboards use Supabase and contain no seeded admin totals", async () => {
   const [appSource, serviceSource, backendSource] = await Promise.all([
     readFile(new URL("../app/headcount-app.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/lib/data-service.ts", import.meta.url), "utf8"),

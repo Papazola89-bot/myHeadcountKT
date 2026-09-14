@@ -22,7 +22,7 @@ Jika backend belum tersedia, aplikasi tidak memaparkan data contoh atau mengangg
 - Dashboard, filter, graf, murid perlu tindakan dan profil individu.
 - Headcount TOV, OTI, AR dan ETR dengan OTI automatik berdasarkan TOV→ETR, perbandingan sasaran, autosave serta undo.
 - Pendaftaran murid sekali untuk Bahasa Melayu, Matematik atau kedua-dua mata pelajaran.
-- Intervensi, tarikh semakan dan penghantaran yang disimpan ke Google Sheets.
+- Intervensi, tarikh semakan dan penghantaran yang disimpan ke Supabase.
 - Analisis sekolah/daerah, heatmap, laporan, CSV, cetakan dan audit.
 - Ketiga-tiga admin mempunyai akses penuh yang sama untuk mengurus sekolah, murid, headcount, intervensi, laporan dan tetapan.
 - Pindah dalam daerah menghantar murid ke senarai **Import Murid** sekolah penerima bersama sejarah headcount.

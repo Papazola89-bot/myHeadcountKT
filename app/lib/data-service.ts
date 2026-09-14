@@ -301,7 +301,7 @@ function skillNumber(value: unknown): number | undefined {
   return number >= 1 && number <= 32 ? number : undefined;
 }
 
-/** Menukar nama lajur Google Sheets dan rekod PENILAIAN kepada bentuk murid UI. */
+/** Menukar nama lajur Supabase dan rekod PENILAIAN kepada bentuk murid UI. */
 export function normalizeAppsScriptStudent(value: unknown): NormalizedAppsScriptStudent {
   const row = asRecord(value);
   const directSkills = asRecord(row.skills);
@@ -361,7 +361,7 @@ export function normalizeAppsScriptStudent(value: unknown): NormalizedAppsScript
   };
 }
 
-/** Storan cache/demo setempat. Data domain Google Sheets menggunakan adapter di bawah. */
+/** Storan cache/demo setempat. Data domain Supabase menggunakan adapter di bawah. */
 export function createLocalDataService<T>(key: string): DataService<T> {
   return {
     async getProfile() {
@@ -422,7 +422,7 @@ export function createLocalDataService<T>(key: string): DataService<T> {
       throw new Error("Senarai sekolah tidak boleh dikosongkan dalam mod lokal.");
     },
     async clearAllData() {
-      throw new Error("Data Google Sheets tidak boleh dikosongkan dalam mod lokal.");
+      throw new Error("Data Supabase tidak boleh dikosongkan dalam mod lokal.");
     },
     async saveAssessment() {},
     async saveTargets() {},
@@ -450,7 +450,7 @@ export function createAppsScriptDataService<T>(
     const idToken = String(credential.idToken ?? "").trim();
     const schoolSessionToken = String(credential.schoolSessionToken ?? "").trim();
     if (!idToken && !schoolSessionToken) {
-      throw new Error("Sila log masuk sebelum mengakses Google Sheets.");
+      throw new Error("Sila log masuk sebelum mengakses Supabase.");
     }
     const requestId = stableRequestId || globalThis.crypto.randomUUID();
     // `action` ialah nama dispatcher API. Klien lama turut menggunakan medan
@@ -493,7 +493,7 @@ export function createAppsScriptDataService<T>(
     },
     async getAdmins() {
       const data = await request("getAdmins");
-      if (!Array.isArray(data)) throw new Error("Senarai pentadbir daripada Google Sheets tidak sah.");
+      if (!Array.isArray(data)) throw new Error("Senarai pentadbir daripada Supabase tidak sah.");
       return data.map(normalizeAdmin);
     },
     async saveAdmin(payload) {
@@ -518,22 +518,22 @@ export function createAppsScriptDataService<T>(
     },
     async getStudents() {
       const data = await request("getStudents");
-      if (!Array.isArray(data)) throw new Error("Senarai murid daripada Google Sheets tidak sah.");
+      if (!Array.isArray(data)) throw new Error("Senarai murid daripada Supabase tidak sah.");
       return data.map(normalizeStudent);
     },
     async getSchools() {
       const data = await request("getSchools");
-      if (!Array.isArray(data)) throw new Error("Senarai sekolah daripada Google Sheets tidak sah.");
+      if (!Array.isArray(data)) throw new Error("Senarai sekolah daripada Supabase tidak sah.");
       return data.map(normalizeSchool);
     },
     async getInterventions() {
       const data = await request("getInterventions");
-      if (!Array.isArray(data)) throw new Error("Senarai intervensi daripada Google Sheets tidak sah.");
+      if (!Array.isArray(data)) throw new Error("Senarai intervensi daripada Supabase tidak sah.");
       return data.map(normalizeIntervention);
     },
     async getInterventionGroups() {
       const data = await request("getInterventionGroups");
-      if (!Array.isArray(data)) throw new Error("Senarai kumpulan intervensi daripada Google Sheets tidak sah.");
+      if (!Array.isArray(data)) throw new Error("Senarai kumpulan intervensi daripada Supabase tidak sah.");
       return data.map(normalizeInterventionGroup);
     },
     // MURID diurus melalui helaian; cache UI disimpan oleh adapter setempat.
