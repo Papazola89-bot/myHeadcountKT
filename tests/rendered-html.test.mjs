@@ -243,6 +243,22 @@ test("analysis import is one batch request and screening is the only manual mapp
   assert.match(backendSource, /assertGuru\(actor\)/);
 });
 
+test("student deletion requires typed confirmation and stays within the teacher school", async () => {
+  const [appSource, serviceSource, backendSource] = await Promise.all([
+    readFile(new URL("../app/headcount-app.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/lib/data-service.ts", import.meta.url), "utf8"),
+    readFile(new URL("../supabase/functions/myheadcountkt-api/index.ts", import.meta.url), "utf8"),
+  ]);
+  assert.match(appSource, /function DeleteStudentModal/);
+  assert.match(appSource, /Taip nama penuh murid untuk mengesahkan/);
+  assert.match(appSource, /aria-label={`Padam \${s\.name}`}/);
+  assert.match(serviceSource, /request\("deleteStudent",\{studentId,confirmation\}\)/);
+  assert.match(backendSource, /action === "deleteStudent"/);
+  assert.match(backendSource, /await ownedStudent\(studentId, actor\)/);
+  assert.match(backendSource, /\.eq\("school_id", actor\.school_id\)/);
+  assert.match(backendSource, /DELETE_STUDENT/);
+});
+
 test("supports atomic BM and Mathematics intake plus persistent targets", async () => {
   const [appSource, serviceSource, backendSource] = await Promise.all([
     readFile(new URL("../app/headcount-app.tsx", import.meta.url), "utf8"),
