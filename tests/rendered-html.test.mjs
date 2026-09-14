@@ -210,10 +210,15 @@ test("reads SASARAN without inventing missing AR values", async () => {
 
 test("detects pupil names, years and subject skills from Analisis Keseluruhan export", async () => {
   const { parseAnalysisExport } = await importTypeScript("../app/lib/analysis-import.ts");
-  const source = await readFile("C:/Users/Ppzola89/Desktop/Analisis_Keseluruhan_TAHUN-2026_PELEPASAN-1.xls", "utf8");
+  const cells = (values) => `<tr>${values.map((value) => `<td>${value}</td>`).join("")}</tr>`;
+  const source = `<table><tr><td><strong>AKTIVITI PENTAKSIRAN:</strong></td><td>PELEPASAN 1</td></tr></table><table><tbody>${cells([
+    "1", "JPN", "PPD", "SEKOLAH KEBANGSAAN SEMANGAR", "MOHAMAD AMSYAR RIFQI BIN MOHAMAD SAUFI", "ID1", "L", "ISLAM", "MELAYU", "MALAYSIA", "TAHUN DUA", "LUAR BANDAR", "TIDAK", "| KP8", "TIDAK", "", "", "KP4 | KP4.4", "TIDAK", "", "", "DITAKSIR", "",
+  ])}${cells([
+    "2", "JPN", "PPD", "SEKOLAH KEBANGSAAN SEMANGAR", "NUR MAWADDAH BINTI MUHAMMAD SAIFUL AZIZI", "ID2", "P", "ISLAM", "MELAYU", "MALAYSIA", "TAHUN TIGA", "LUAR BANDAR", "TIDAK", "| MENGUASAI", "YA", "", "", "KP5 | KP5.4", "TIDAK", "", "", "DITAKSIR", "",
+  ])}</tbody></table>`;
   const preview = parseAnalysisExport(source);
   assert.equal(preview.schoolName, "SEKOLAH KEBANGSAAN SEMANGAR");
-  assert.equal(preview.pupilCount, 12);
+  assert.equal(preview.pupilCount, 2);
   assert.equal(preview.sourceActivity, "PELEPASAN 1");
   assert.deepEqual(
     preview.rows.find((row) => row.name.startsWith("MOHAMAD AMSYAR") && row.subject === "Bahasa Melayu"),
