@@ -1,6 +1,6 @@
 import { createClient } from "npm:@supabase/supabase-js@2.95.0";
 
-const API_VERSION = "2.2.0";
+const API_VERSION = "2.3.0";
 const GOOGLE_CLIENT_ID = "491720020946-9f6ifkrt5nrrpu4a7dsqeunv9iu0ell6.apps.googleusercontent.com";
 const ALLOWED_ORIGINS = new Set([
   "https://sihadir-headcount.geek2606.chatgpt.site",
@@ -221,6 +221,35 @@ async function dispatch(action: string, input: Row, actor: Actor | null): Promis
     if (removed.error) fail("DATABASE_ERROR", removed.error.message, 500);
     await audit(actor, "DELETE_STUDENT", related.data, { deleted_ids: ids, nama: student.nama });
     return { deleted: true, deleted_ids: ids, deleted_count: ids.length, nama: student.nama };
+  }
+  if (action === "updateStudent") {
+    assertGuru(actor);
+    const studentId = required(input.studentId || input.student_id, "studentId"), student = await ownedStudent(studentId, actor);
+    const nama = required(input.name || input.nama, "Nama murid", 300).replace(/\s+/g, " "), tahun = Number(input.year || input.tahun), kelas = required(input.className || input.kelas, "Kelas", 100);
+    if (tahun < 2 || tahun > 6) fail("INVALID_YEAR", "Tahun murid mestilah 2 hingga 6.");
+    const tarikhMula = input.startDate || input.tarikh_mula ? isoDate(input.startDate || input.tarikh_mula, "Tarikh mula") : student.tarikh_mula;
+    const status = upper(input.status) === "PELEPASAN" ? "Pelepasan" : "Aktif", groupId = text(input.groupId || input.group_id);
+    const related = await supabase.from("students").select("*").eq("school_id", actor.school_id).eq("nama", student.nama).eq("tahun", student.tahun).eq("kelas", student.kelas);
+    if (related.error) fail("DATABASE_ERROR", related.error.message, 500);
+    const relatedIds = (related.data || []).map(row => row.student_id), now = new Date().toISOString();
+    const updated = await supabase.from("students").update({ nama, tahun, kelas, tarikh_mula: tarikhMula, status, updated_at: now }).in("student_id", relatedIds).eq("school_id", actor.school_id);
+    if (updated.error) fail(updated.error.code === "23505" ? "DUPLICATE_STUDENT" : "DATABASE_ERROR", updated.error.code === "23505" ? "Rekod murid dengan maklumat yang sama sudah wujud." : updated.error.message, 500);
+    const groups = await supabase.from("intervention_groups").select("*").eq("school_id", actor.school_id).order("group_name");
+    if (groups.error) fail("DATABASE_ERROR", groups.error.message, 500);
+    if (groupId && !(groups.data || []).some(group => group.group_id === groupId)) fail("GROUP_ACCESS_DENIED", "Kumpulan intervensi tidak sah.", 403);
+    for (const group of groups.data || []) {
+      const members = Array.isArray(group.student_ids) ? group.student_ids.map(String) : [];
+      const withoutStudent = members.filter(id => id !== studentId);
+      const nextMembers = group.group_id === groupId ? [...new Set([...withoutStudent, studentId])] : withoutStudent;
+      if (JSON.stringify(nextMembers) !== JSON.stringify(members)) {
+        const groupUpdate = await supabase.from("intervention_groups").update({ student_ids: nextMembers, updated_at: now }).eq("group_id", group.group_id).eq("school_id", actor.school_id);
+        if (groupUpdate.error) fail("DATABASE_ERROR", groupUpdate.error.message, 500);
+      }
+    }
+    await audit(actor, "UPDATE_STUDENT", related.data, { student_id: studentId, nama, tahun, kelas, status, group_id: groupId || null });
+    const refreshedGroups = await supabase.from("intervention_groups").select("*").eq("school_id", actor.school_id).order("group_name");
+    if (refreshedGroups.error) fail("DATABASE_ERROR", refreshedGroups.error.message, 500);
+    return { saved: true, students: await getStudents(actor), groups: (refreshedGroups.data || []).map(group => ({ ...group, student_ids_json: group.student_ids })) };
   }
   if (action === "saveAssessment") { assertGuru(actor); const studentId = required(input.studentId || input.student_id, "studentId"), student = await ownedStudent(studentId, actor), subject = normalizeSubject(input.subject || student.subject), cycle = normalizeCycle(input.cycle), skillCode = normalizeSkill(input.skillCode || input.skill_code), year = Number(input.tahun_data || input.year || new Date().getFullYear()); const record = { assessment_id: uuid(), student_id: studentId, subject, tahun_data: year, cycle, skill_code: skillCode, tarikh: new Date().toISOString(), teacher_id: actor.user_id, updated_at: new Date().toISOString() }; const result = await supabase.from("assessments").upsert(record, { onConflict: "student_id,subject,tahun_data,cycle" }).select("*").single(); if (result.error) fail("DATABASE_ERROR", result.error.message, 500); await audit(actor, "SAVE_ASSESSMENT", null, result.data); return { saved: true, ...result.data }; }
   if (action === "saveTargets") { assertGuru(actor); const studentId = required(input.studentId || input.student_id, "studentId"), student = await ownedStudent(studentId, actor), subject = normalizeSubject(input.subject || student.subject), year = Number(input.tahun_data || input.year || new Date().getFullYear()), tov = skillNumber(input.TOV || input.tov), etr = skillNumber(input.ETR || input.etr), manual = Boolean(input.manualOverride || input.manual_override); if (etr < tov) fail("INVALID_TARGET", "ETR hendaklah sama atau lebih tinggi daripada TOV."); const distance = etr - tov; const generated = [0.25, 0.5, 0.75].map(part => Math.round(tov + distance * part)); const values = manual ? [input.OTI1 || input.oti1, input.OTI2 || input.oti2, input.OTI3 || input.oti3].map(skillNumber) : generated; if (!(tov <= values[0] && values[0] <= values[1] && values[1] <= values[2] && values[2] <= etr)) fail("INVALID_TARGET_ORDER", "Pastikan TOV <= OTI1 <= OTI2 <= OTI3 <= ETR."); const now = new Date().toISOString(); const assessments = [["TOV", tov], ["ETR", etr]].map(([cycle, value]) => ({ assessment_id: uuid(), student_id: studentId, subject, tahun_data: year, cycle, skill_code: `KP${value}`, tarikh: now, teacher_id: actor.user_id, updated_at: now })); const ar = await supabase.from("assessments").upsert(assessments, { onConflict: "student_id,subject,tahun_data,cycle" }); if (ar.error) fail("DATABASE_ERROR", ar.error.message, 500); const target = { student_id: studentId, OTI1: `KP${values[0]}`, OTI2: `KP${values[1]}`, OTI3: `KP${values[2]}`, ETR: `KP${etr}`, manual_override: manual, updated_at: now }; const tr = await supabase.from("targets").upsert(target).select("*").single(); if (tr.error) fail("DATABASE_ERROR", tr.error.message, 500); await audit(actor, "SAVE_TARGETS", null, target); return { saved: true, ...target, TOV: `KP${tov}` }; }

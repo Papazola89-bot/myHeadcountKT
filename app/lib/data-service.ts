@@ -125,6 +125,11 @@ export type DeleteStudentResult = {
   deletedCount: number;
 };
 
+export type UpdateStudentResult<T> = {
+  students: T[];
+  groups: InterventionGroupRecord[];
+};
+
 export type DataService<T> = {
   getProfile(): Promise<UserProfile>;
   saveProfile(name: string): Promise<UserProfile>;
@@ -143,6 +148,7 @@ export type DataService<T> = {
   saveStudentSubjects(payload: Record<string, unknown>): Promise<T[]>;
   importAnalysis(payload: Record<string, unknown>): Promise<AnalysisImportResult<T>>;
   deleteStudent(studentId: string, confirmation: string): Promise<DeleteStudentResult>;
+  updateStudent(payload: Record<string, unknown>): Promise<UpdateStudentResult<T>>;
   saveSchool(payload: Record<string, unknown>): Promise<SchoolRecord>;
   deleteSchool(schoolId: string): Promise<void>;
   clearSchools(confirmation: string): Promise<void>;
@@ -432,6 +438,9 @@ export function createLocalDataService<T>(key: string): DataService<T> {
     async deleteStudent() {
       throw new Error("Murid tidak boleh dipadam dalam mod lokal.");
     },
+    async updateStudent() {
+      throw new Error("Murid tidak boleh dikemas kini dalam mod lokal.");
+    },
     async saveSchool() {
       throw new Error("Sekolah tidak boleh disimpan dalam mod lokal.");
     },
@@ -581,6 +590,12 @@ export function createAppsScriptDataService<T>(
       const data=asRecord(await request("deleteStudent",{studentId,confirmation}));
       const deletedIds=Array.isArray(data.deleted_ids)?data.deleted_ids.map(String):[];
       return {deletedIds,deletedCount:Number(data.deleted_count??deletedIds.length)};
+    },
+    async updateStudent(payload) {
+      const data=asRecord(await request("updateStudent",payload));
+      const students=Array.isArray(data.students)?data.students.map(normalizeStudent):[];
+      const groups=Array.isArray(data.groups)?data.groups.map(normalizeInterventionGroup):[];
+      return {students,groups};
     },
     async saveSchool(payload) {
       return normalizeSchool(await request("saveSchool", payload));

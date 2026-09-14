@@ -259,6 +259,24 @@ test("student deletion requires typed confirmation and stays within the teacher 
   assert.match(backendSource, /DELETE_STUDENT/);
 });
 
+test("student editing updates biodata and moves one subject record between intervention groups", async () => {
+  const [appSource, serviceSource, backendSource] = await Promise.all([
+    readFile(new URL("../app/headcount-app.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/lib/data-service.ts", import.meta.url), "utf8"),
+    readFile(new URL("../supabase/functions/myheadcountkt-api/index.ts", import.meta.url), "utf8"),
+  ]);
+  assert.match(appSource, /function EditStudentModal/);
+  assert.match(appSource, /Kumpulan Intervensi/);
+  assert.match(appSource, /Menukar pilihan akan memindahkan murid daripada kumpulan lama/);
+  assert.match(appSource, /aria-label={`Edit \${s\.name}`}/);
+  assert.match(serviceSource, /request\("updateStudent",payload\)/);
+  assert.match(backendSource, /action === "updateStudent"/);
+  assert.match(backendSource, /await ownedStudent\(studentId, actor\)/);
+  assert.match(backendSource, /members\.filter\(id => id !== studentId\)/);
+  assert.match(backendSource, /group\.group_id === groupId/);
+  assert.match(backendSource, /UPDATE_STUDENT/);
+});
+
 test("supports atomic BM and Mathematics intake plus persistent targets", async () => {
   const [appSource, serviceSource, backendSource] = await Promise.all([
     readFile(new URL("../app/headcount-app.tsx", import.meta.url), "utf8"),
