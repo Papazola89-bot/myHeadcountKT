@@ -113,6 +113,13 @@ export type InterventionBatchResult = {
   alreadySaved: boolean;
 };
 
+export type AnalysisImportResult<T> = {
+  students: T[];
+  pupilCount: number;
+  recordCount: number;
+  cycle: string;
+};
+
 export type DataService<T> = {
   getProfile(): Promise<UserProfile>;
   saveProfile(name: string): Promise<UserProfile>;
@@ -129,6 +136,7 @@ export type DataService<T> = {
   saveStudents(students: T[]): Promise<void>;
   saveStudent(payload: Record<string, unknown>): Promise<T>;
   saveStudentSubjects(payload: Record<string, unknown>): Promise<T[]>;
+  importAnalysis(payload: Record<string, unknown>): Promise<AnalysisImportResult<T>>;
   saveSchool(payload: Record<string, unknown>): Promise<SchoolRecord>;
   deleteSchool(schoolId: string): Promise<void>;
   clearSchools(confirmation: string): Promise<void>;
@@ -412,6 +420,9 @@ export function createLocalDataService<T>(key: string): DataService<T> {
       const subjects=Array.isArray(payload.subjects)?payload.subjects:[payload.subject];
       return subjects.map(subject=>({...payload,subject}) as T);
     },
+    async importAnalysis() {
+      throw new Error("Import analisis tidak boleh digunakan dalam mod lokal.");
+    },
     async saveSchool() {
       throw new Error("Sekolah tidak boleh disimpan dalam mod lokal.");
     },
@@ -546,6 +557,16 @@ export function createAppsScriptDataService<T>(
       const data=asRecord(await request("saveStudent", payload));
       const students=Array.isArray(data.students)?data.students: data.student?[data.student]:[];
       return students.map(normalizeStudent);
+    },
+    async importAnalysis(payload) {
+      const data=asRecord(await request("importAnalysis",payload));
+      const students=Array.isArray(data.students)?data.students.map(normalizeStudent):[];
+      return {
+        students,
+        pupilCount:Number(data.pupil_count??data.pupilCount??0),
+        recordCount:Number(data.record_count??data.recordCount??0),
+        cycle:String(data.cycle??""),
+      };
     },
     async saveSchool(payload) {
       return normalizeSchool(await request("saveSchool", payload));

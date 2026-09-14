@@ -208,6 +208,36 @@ test("reads SASARAN without inventing missing AR values", async () => {
   assert.equal(student.manualOti, true);
 });
 
+test("detects pupil names, years and subject skills from Analisis Keseluruhan export", async () => {
+  const { parseAnalysisExport } = await importTypeScript("../app/lib/analysis-import.ts");
+  const source = await readFile("C:/Users/Ppzola89/Desktop/Analisis_Keseluruhan_TAHUN-2026_PELEPASAN-1.xls", "utf8");
+  const preview = parseAnalysisExport(source);
+  assert.equal(preview.schoolName, "SEKOLAH KEBANGSAAN SEMANGAR");
+  assert.equal(preview.pupilCount, 12);
+  assert.equal(preview.sourceActivity, "PELEPASAN 1");
+  assert.deepEqual(
+    preview.rows.find((row) => row.name.startsWith("MOHAMAD AMSYAR") && row.subject === "Bahasa Melayu"),
+    { name: "MOHAMAD AMSYAR RIFQI BIN MOHAMAD SAUFI", year: 2, className: "Tahun 2", subject: "Bahasa Melayu", skillCode: "KP8" },
+  );
+  assert.equal(preview.rows.find((row) => row.name.startsWith("MOHAMAD AMSYAR") && row.subject === "Matematik")?.skillCode, "KP4");
+  assert.equal(preview.rows.find((row) => row.name.startsWith("NUR MAWADDAH") && row.subject === "Bahasa Melayu")?.skillCode, "KP32");
+});
+
+test("analysis import is one batch request and screening is the only manual mapping", async () => {
+  const [appSource, serviceSource, backendSource] = await Promise.all([
+    readFile(new URL("../app/headcount-app.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/lib/data-service.ts", import.meta.url), "utf8"),
+    readFile(new URL("../supabase/functions/myheadcountkt-api/index.ts", import.meta.url), "utf8"),
+  ]);
+  assert.match(appSource, /Auto Isi dari Excel/);
+  assert.match(appSource, /Ini sahaja pilihan manual yang diperlukan/);
+  assert.match(appSource, /cycle:`AR \$\{screening\}`/);
+  assert.match(serviceSource, /request\("importAnalysis",payload\)/);
+  assert.match(backendSource, /action === "importAnalysis"/);
+  assert.match(backendSource, /IMPORT_ANALYSIS/);
+  assert.match(backendSource, /assertGuru\(actor\)/);
+});
+
 test("supports atomic BM and Mathematics intake plus persistent targets", async () => {
   const [appSource, serviceSource, backendSource] = await Promise.all([
     readFile(new URL("../app/headcount-app.tsx", import.meta.url), "utf8"),
