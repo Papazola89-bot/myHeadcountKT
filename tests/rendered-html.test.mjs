@@ -419,7 +419,7 @@ test("failed intervention sync rejects without creating a retry request id", asy
   }
 });
 
-test("editing a group changes only its student id references", async () => {
+test("editing a group preserves member references and multiple skill codes", async () => {
   const { createAppsScriptDataService } = await importTypeScript("../app/lib/data-service.ts");
   const originalFetch = globalThis.fetch;
   const calls = [];
@@ -431,17 +431,20 @@ test("editing a group changes only its student id references", async () => {
       school_id: "SCH-1",
       group_name: body.groupName,
       skill_code: body.skillCode,
+      skill_codes: body.skillCodes,
       skill_name: body.skillName,
       student_ids: body.studentIds,
     } }), { status: 200 });
   };
   try {
     const service = createAppsScriptDataService("https://example.test/exec", (value) => value, () => ({ schoolSessionToken: "session" }));
-    const updated = await service.saveInterventionGroup({ groupId: "GRP-1", groupName: "Kumpulan KVK 1", skillCode: "KP8", skillName: "Perkataan KVK", studentIds: ["ST-1", "ST-3", "ST-4", "ST-5"] });
+    const updated = await service.saveInterventionGroup({ groupId: "GRP-1", groupName: "Kumpulan KVK 1", skillCode: "KP8", skillCodes: ["KP8", "KP9", "KP10"], skillName: "Perkataan KVK", studentIds: ["ST-1", "ST-3", "ST-4", "ST-5"] });
     assert.deepEqual(updated.studentIds, ["ST-1", "ST-3", "ST-4", "ST-5"]);
+    assert.deepEqual(updated.skillCodes, ["KP8", "KP9", "KP10"]);
     assert.equal(calls.length, 1);
     assert.equal(calls[0].action, "saveInterventionGroup");
     assert.equal(calls[0].groupId, "GRP-1");
+    assert.deepEqual(calls[0].skillCodes, ["KP8", "KP9", "KP10"]);
     assert.equal("student" in calls[0], false);
   } finally {
     globalThis.fetch = originalFetch;

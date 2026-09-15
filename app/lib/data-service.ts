@@ -100,6 +100,7 @@ export type InterventionGroupRecord = {
   schoolId: string;
   name: string;
   skillCode: string;
+  skillCodes: string[];
   skillName: string;
   studentIds: string[];
   createdAt: string;
@@ -302,11 +303,26 @@ function normalizeInterventionGroup(value: unknown): InterventionGroupRecord {
       studentIds = rawStudentIds.split(",").map((id) => id.trim()).filter(Boolean);
     }
   }
+  const primarySkillCode = String(row.skill_code ?? row.skillCode ?? "").trim();
+  const rawSkillCodes = row.skill_codes ?? row.skillCodes;
+  let skillCodes: string[] = [];
+  if (Array.isArray(rawSkillCodes)) skillCodes = rawSkillCodes.map(String).map((code) => code.trim()).filter(Boolean);
+  else if (typeof rawSkillCodes === "string" && rawSkillCodes.trim()) {
+    try {
+      const parsed = JSON.parse(rawSkillCodes);
+      if (Array.isArray(parsed)) skillCodes = parsed.map(String).map((code) => code.trim()).filter(Boolean);
+    } catch {
+      skillCodes = rawSkillCodes.split(",").map((code) => code.trim()).filter(Boolean);
+    }
+  }
+  if (!skillCodes.length && primarySkillCode) skillCodes = [primarySkillCode];
+  skillCodes = [...new Set(skillCodes)];
   return {
     id: String(row.group_id ?? row.groupId ?? row.id ?? ""),
     schoolId: String(row.school_id ?? row.schoolId ?? ""),
     name: String(row.group_name ?? row.groupName ?? row.name ?? "Tanpa nama"),
-    skillCode: String(row.skill_code ?? row.skillCode ?? ""),
+    skillCode: skillCodes[0] ?? primarySkillCode,
+    skillCodes,
     skillName: String(row.skill_name ?? row.skillName ?? ""),
     studentIds: [...new Set(studentIds)],
     createdAt: String(row.created_at ?? row.createdAt ?? ""),
